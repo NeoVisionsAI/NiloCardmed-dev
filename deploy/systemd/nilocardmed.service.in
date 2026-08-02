@@ -1,0 +1,26 @@
+[Unit]
+Description=NiloCardmed container (@COMPOSE_PROJECT_NAME@)
+Documentation=file://@INSTALL_DIR@/README.md
+Requires=@SYSTEMD_REQUIRES@
+After=@SYSTEMD_AFTER@
+Wants=@SYSTEMD_WANTS@
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=@NILOCARDMED_RUN_USER@
+Group=@NILOCARDMED_RUN_GROUP@
+WorkingDirectory=@INSTALL_DIR@
+Environment=COMPOSE_PROJECT_NAME=@COMPOSE_PROJECT_NAME@
+Environment=COMPOSE_FILE=@COMPOSE_FILE@
+EnvironmentFile=-@INSTALL_DIR@/deploy.env
+EnvironmentFile=-@INSTALL_DIR@/.env
+ExecStart=@DOCKER_COMPOSE_CMD@ up -d --remove-orphans
+ExecStop=@DOCKER_COMPOSE_CMD@ down
+ExecReload=@DOCKER_COMPOSE_CMD@ up -d --remove-orphans
+TimeoutStartSec=0
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=@SYSTEMD_WANTED_BY@

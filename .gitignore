@@ -214,5 +214,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Streamlit
-.streamlit/secrets.toml
+# Local data directory (config, runtime state)
+data/
+logs/
+deploy.env
+docker-compose.override.yml
+

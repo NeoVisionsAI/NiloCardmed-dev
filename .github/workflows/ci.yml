@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Smoke CLI
+        run: |
+          NILOCARDMED_DATA_DIR=/tmp/nilocardmed-ci \
+            python -m nilocardmed.main bluetooth test-framing --json
+          NILOCARDMED_DATA_DIR=/tmp/nilocardmed-ci \
+            python -m nilocardmed.main bluetooth test-commands --skip-camera-capture

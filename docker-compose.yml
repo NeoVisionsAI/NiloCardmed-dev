@@ -1,0 +1,52 @@
+# Base de NiloCardmed — parametrizable vía deploy.env / variables de entorno.
+# En Raspberry Pi, combinar con docker-compose.pi.yml (COMPOSE_FILE en deploy.env).
+
+services:
+  nilocardmed:
+    container_name: ${NILOCARDMED_CONTAINER_NAME:-nilocardmed}
+    image: ${NILOCARDMED_IMAGE:-nilocardmed:latest}
+    build:
+      context: ${BUILD_CONTEXT:-.}
+      dockerfile: ${DOCKERFILE:-Dockerfile}
+      platforms:
+        - ${DOCKER_DEFAULT_PLATFORM:-linux/arm/v7}
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.11-slim-bookworm}
+        APP_USER: ${APP_USER:-nilocardmed}
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+        APP_HOME: ${APP_HOME:-/app}
+        DATA_DIR: ${CONTAINER_DATA_DIR:-/data}
+        LOG_DIR: ${CONTAINER_LOG_DIR:-/var/log/nilocardmed}
+    restart: ${RESTART_POLICY:-unless-stopped}
+    env_file:
+      - path: ${APP_ENV_FILE:-.env}
+        required: false
+    environment:
+      NILOCARDMED_DATA_DIR: ${CONTAINER_DATA_DIR:-/data}
+      NILOCARDMED_LOG_DIR: ${CONTAINER_LOG_DIR:-/var/log/nilocardmed}
+      APP_UID: ${APP_UID:-1000}
+      APP_GID: ${APP_GID:-1000}
+    volumes:
+      - ${HOST_DATA_DIR:-nilocardmed-data}:${CONTAINER_DATA_DIR:-/data}
+      - ${HOST_LOG_DIR:-nilocardmed-logs}:${CONTAINER_LOG_DIR:-/var/log/nilocardmed}
+    network_mode: ${NETWORK_MODE:-bridge}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "nilocardmed.main",
+          "health",
+          "check",
+          "--exit-code",
+        ]
+      interval: ${HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${HEALTHCHECK_TIMEOUT:-5s}
+      start_period: ${HEALTHCHECK_START_PERIOD:-20s}
+      retries: ${HEALTHCHECK_RETRIES:-3}
+
+volumes:
+  nilocardmed-data:
+  nilocardmed-logs:
