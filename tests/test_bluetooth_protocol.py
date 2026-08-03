@@ -59,3 +59,43 @@ def test_health_status_command():
     )
     assert resp["ok"] is True
     assert "healthy" in resp["data"]
+
+
+def test_system_info_and_time_get():
+    service = _mock_service()
+    auth = json.loads(
+        decode_frames(
+            service.process_mock_frames(
+                json.dumps({"cmd": "auth", "password": "changeme"}).encode()
+            )
+        ).decode()
+    )
+    token = auth["data"]["token"]
+
+    def _call(cmd: str, **extra):
+        payload = {"cmd": cmd, "token": token, **extra}
+        return json.loads(
+            decode_frames(
+                service.process_mock_frames(json.dumps(payload).encode())
+            ).decode()
+        )
+
+    info = _call("system_info")
+    assert info["ok"] is True
+    assert "version" in info["data"]
+
+    storage = _call("storage_status")
+    assert storage["ok"] is True
+    assert "free_percent" in storage["data"]
+
+    clock = _call("time_get")
+    assert clock["ok"] is True
+    assert "epoch" in clock["data"]
+
+    history = _call("sampler_history", limit=5)
+    assert history["ok"] is True
+    assert "cycles" in history["data"]
+
+    events = _call("events_list", limit=5)
+    assert events["ok"] is True
+    assert "events" in events["data"]

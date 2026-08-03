@@ -14,7 +14,7 @@ from nilocardmed import __version__
 from nilocardmed.camera.discovery import list_cameras
 from nilocardmed.camera.exceptions import CameraError
 from nilocardmed.config.models import AppConfig, EnvironmentSettings
-from nilocardmed.resilience.models import ComponentHealth, HealthReport
+from nilocardmed.resilience.models import ComponentHealth, HealthReport, HealthStatus
 from nilocardmed.wifi.exceptions import WifiError
 from nilocardmed.wifi.service import WifiService
 
@@ -48,14 +48,21 @@ class HealthService:
             self._check_storage(),
             self._check_memory(),
         ]
-        critical = {"wifi", "camera", "sampler"}
-        failed_critical = [c for c in components if c.name in critical and not c.ok]
-        failed_any = [c for c in components if not c.ok]
-        healthy = len(failed_critical) == 0
-        degraded = not healthy or len(failed_any) > len(failed_critical)
+
+        statuses = [component.severity for component in components if not component.ok]
+        if any(status == "unhealthy" for status in statuses):
+            status: HealthStatus = "unhealthy"
+        elif any(status == "degraded" for status in statuses):
+            status = "degraded"
+        else:
+            status = "healthy"
+
+        healthy = status == "healthy"
+        degraded = status == "degraded"
         return HealthReport(
             healthy=healthy,
             degraded=degraded,
+            status=status,
             components=components,
             checked_at_epoch=time.time(),
         )
@@ -70,19 +77,39 @@ class HealthService:
     def _check_wifi(self) -> ComponentHealth:
         wifi = self._config.wifi
         if not wifi.enabled:
-            return ComponentHealth("wifi", True, "WiFi deshabilitado")
+            return ComponentHealth("wifi", True, "WiFi deshabilitado", severity="healthy")
 
         if not wifi.ssid:
-            return ComponentHealth("wifi", True, "Sin SSID configurado (modo provisioning)")
+            return ComponentHealth(
+                "wifi",
+                True,
+                "Sin SSID configurado (modo provisioning)",
+                severity="healthy",
+            )
 
         try:
             service = WifiService(wifi)
-            status = service.status(check_connectivity=self._config.resilience.check_connectivity_in_health)
+            status = service.status(
+                check_connectivity=self._config.resilience.check_connectivity_in_health
+            )
         except WifiError as exc:
-            return ComponentHealth("wifi", False, str(exc))
+            if self._config.resilience.health_treat_wifi_provisioning_as_degraded:
+                return ComponentHealth("wifi", False, str(exc), severity="degraded")
+            return ComponentHealth("wifi", False, str(exc), severity="unhealthy")
 
         if not status.connected:
-            return ComponentHealth("wifi", False, "Sin conexión WiFi", status.to_dict())
+            severity: HealthStatus = (
+                "degraded"
+                if self._config.resilience.health_treat_wifi_provisioning_as_degraded
+                else "unhealthy"
+            )
+            return ComponentHealth(
+                "wifi",
+                False,
+                "Sin conexión WiFi",
+                status.to_dict(),
+                severity=severity,
+            )
 
         if self._config.resilience.check_connectivity_in_health and not status.connectivity_ok:
             return ComponentHealth(
@@ -90,6 +117,7 @@ class HealthService:
                 False,
                 "WiFi conectado pero sin conectividad externa",
                 status.to_dict(),
+                severity="degraded",
             )
 
         return ComponentHealth(
@@ -97,6 +125,7 @@ class HealthService:
             True,
             f"Conectado a {status.ssid}",
             status.to_dict(),
+            severity="healthy",
         )
 
     def _check_camera(self) -> ComponentHealth:
@@ -109,26 +138,27 @@ class HealthService:
                 include_non_capture=False,
             )
         except CameraError as exc:
-            return ComponentHealth("camera", False, str(exc))
+            return ComponentHealth("camera", False, str(exc), severity="unhealthy")
 
         capture_devices = [device for device in devices if device.supports_capture]
         if not capture_devices:
-            return ComponentHealth("camera", False, "No hay cámaras USB con captura")
+            return ComponentHealth("camera", False, "No hay cámaras USB con captura", severity="unhealthy")
 
         return ComponentHealth(
             "camera",
             True,
             f"{len(capture_devices)} cámara(s) detectada(s)",
             {"devices": [str(device.path) for device in capture_devices]},
+            severity="healthy",
         )
 
     def _check_ser(self) -> ComponentHealth:
         ser = self._config.ser
         if not ser.enabled:
-            return ComponentHealth("ser", True, "SER deshabilitado")
+            return ComponentHealth("ser", True, "SER deshabilitado", severity="healthy")
 
         if not self._config.resilience.ser_health_check_enabled:
-            return ComponentHealth("ser", True, "SER habilitado (sin probe HTTP)")
+            return ComponentHealth("ser", True, "SER habilitado (sin probe HTTP)", severity="healthy")
 
         try:
             with httpx.Client(timeout=ser.timeout_seconds, verify=ser.verify_ssl) as client:
@@ -136,43 +166,61 @@ class HealthService:
                 if response.status_code >= 400:
                     response = client.get(ser.url)
         except httpx.HTTPError as exc:
-            return ComponentHealth("ser", False, f"SER no alcanzable: {exc}")
+            return ComponentHealth("ser", False, f"SER no alcanzable: {exc}", severity="degraded")
 
         ok = response.status_code in set(ser.success_status_codes) or response.status_code < 500
+        severity: HealthStatus = "healthy" if ok else "degraded"
         return ComponentHealth(
             "ser",
             ok,
             f"SER respondió HTTP {response.status_code}",
             {"url": ser.url, "status_code": response.status_code},
+            severity=severity,
         )
 
     def _check_bluetooth(self) -> ComponentHealth:
         bt = self._config.bluetooth
         if not bt.enabled:
-            return ComponentHealth("bluetooth", True, "Bluetooth deshabilitado")
+            return ComponentHealth("bluetooth", True, "Bluetooth deshabilitado", severity="healthy")
         return ComponentHealth(
             "bluetooth",
             True,
             f"BLE habilitado ({bt.backend})",
             {"device_name": bt.device_name, "backend": bt.backend},
+            severity="healthy",
         )
 
     def _check_sampler(self) -> ComponentHealth:
         sampling = self._config.sampling
         if not sampling.enabled:
-            return ComponentHealth("sampler", True, "Muestreo deshabilitado")
+            return ComponentHealth("sampler", True, "Muestreo deshabilitado", severity="healthy")
 
         if self._sampler_engine is None:
-            return ComponentHealth("sampler", True, "Muestreo habilitado (estado no disponible)")
+            return ComponentHealth(
+                "sampler",
+                True,
+                "Muestreo habilitado (estado no disponible)",
+                severity="healthy",
+            )
 
         state = self._sampler_engine.state
         data = state.to_dict()
+        if not state.running and state.stop_reason in {"window_end", "shutdown"}:
+            return ComponentHealth(
+                "sampler",
+                True,
+                f"Muestreo detenido ({state.stop_reason})",
+                data,
+                severity="healthy",
+            )
+
         if not state.running and state.stop_reason:
             return ComponentHealth(
                 "sampler",
                 False,
                 f"Muestreo detenido ({state.stop_reason})",
                 data,
+                severity="unhealthy",
             )
 
         if state.consecutive_failures > 0:
@@ -181,47 +229,52 @@ class HealthService:
                 False,
                 f"{state.consecutive_failures} fallos consecutivos",
                 data,
+                severity="degraded",
             )
 
-        return ComponentHealth("sampler", True, "Muestreo activo", data)
+        return ComponentHealth("sampler", True, "Muestreo activo", data, severity="healthy")
 
     def _check_storage(self) -> ComponentHealth:
         path = self._env.data_dir
         try:
             usage = shutil.disk_usage(path)
         except OSError as exc:
-            return ComponentHealth("storage", False, f"No se pudo leer disco: {exc}")
+            return ComponentHealth("storage", False, f"No se pudo leer disco: {exc}", severity="unhealthy")
 
         free_mb = usage.free // (1024 * 1024)
         min_mb = self._config.resilience.min_free_disk_mb
         ok = free_mb >= min_mb
+        severity: HealthStatus = "healthy" if ok else "unhealthy"
         return ComponentHealth(
             "storage",
             ok,
             f"Libre {free_mb} MiB en {path}",
             {"free_mb": free_mb, "min_free_mb": min_mb},
+            severity=severity,
         )
 
     def _check_memory(self) -> ComponentHealth:
         threshold = self._config.resilience.low_memory_mb_threshold
         if threshold <= 0:
-            return ComponentHealth("memory", True, "Comprobación de memoria deshabilitada")
+            return ComponentHealth("memory", True, "Comprobación de memoria deshabilitada", severity="healthy")
 
         meminfo = Path("/proc/meminfo")
         if not meminfo.exists():
-            return ComponentHealth("memory", True, "Meminfo no disponible")
+            return ComponentHealth("memory", True, "Meminfo no disponible", severity="healthy")
 
         available_kb = _read_memavailable_kb(meminfo)
         if available_kb is None:
-            return ComponentHealth("memory", True, "MemAvailable no legible")
+            return ComponentHealth("memory", True, "MemAvailable no legible", severity="healthy")
 
         available_mb = available_kb // 1024
         ok = available_mb >= threshold
+        severity: HealthStatus = "healthy" if ok else "degraded"
         return ComponentHealth(
             "memory",
             ok,
             f"Memoria disponible ~{available_mb} MiB",
             {"available_mb": available_mb, "threshold_mb": threshold},
+            severity=severity,
         )
 
 

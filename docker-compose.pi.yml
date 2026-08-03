@@ -5,6 +5,8 @@
 
 services:
   nilocardmed:
+    cap_add:
+      - SYS_TIME
     devices:
       - ${VIDEO_DEVICE_HOST:-/dev/video0}:${VIDEO_DEVICE_CONTAINER:-/dev/video0}
     group_add:

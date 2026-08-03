@@ -15,6 +15,7 @@ from nilocardmed.config.models import EnvironmentSettings
 from nilocardmed.logging_setup import setup_logging
 from nilocardmed.sampler.engine import SamplerEngine
 from nilocardmed.sampler.cli import run_sampler_cli
+from nilocardmed.sampler.supervisor import SamplerThreadSupervisor
 from nilocardmed.ser_client.cli import run_ser_cli
 from nilocardmed.wifi.cli import run_wifi_cli
 from nilocardmed.wifi.exceptions import WifiError
@@ -24,6 +25,9 @@ from nilocardmed.bluetooth.service import BluetoothService
 from nilocardmed.cardmed.cli import run_cardmed_cli
 from nilocardmed.resilience.cli import run_health_cli
 from nilocardmed.resilience.supervisor import ResilienceSupervisor
+from nilocardmed.storage.manager import StorageManager
+from nilocardmed.system.watchdog import Watchdog
+from nilocardmed.telemetry.store import telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +44,24 @@ def run_daemon() -> int:
     logger.info("Iniciando NiloCardmed v%s", __version__)
     logger.info("Entorno: %s", env.public_summary())
 
+    telemetry.configure_persistence(env.data_dir / "telemetry.jsonl")
+    telemetry.load_recent_from_disk()
+
     config_manager = ConfigManager(env)
     config = config_manager.load()
     config_manager.save(config)
 
     logger.info("Configuración activa: %s", config_manager.summary())
+
+    if config.storage.enabled and config.storage.retry_pending_on_startup:
+        storage = StorageManager(
+            config.storage,
+            env,
+            captures_dir=_captures_dir(config, env),
+        )
+        pending_result = storage.upload_pending_batch(config, window_active=False, max_items=1)
+        if pending_result.get("uploaded", 0) > 0:
+            logger.info("Reintento pending al arranque: %s subida(s)", pending_result["uploaded"])
 
     if (
         config.wifi.enabled
@@ -72,17 +89,31 @@ def run_daemon() -> int:
 
     sampler_thread: threading.Thread | None = None
     sampler_engine: SamplerEngine | None = None
+    sampler_thread_supervisor: SamplerThreadSupervisor | None = None
+
     if config.sampling.enabled:
         sampler_engine = SamplerEngine(config_manager, env)
 
-        def _run_sampler() -> None:
-            try:
-                sampler_engine.run(shutdown)
-            except Exception:
-                logger.exception("Error fatal en el hilo de muestreo")
+        def _start_sampler_thread() -> threading.Thread:
+            def _run_sampler() -> None:
+                try:
+                    assert sampler_engine is not None
+                    sampler_engine.run(shutdown)
+                except Exception:
+                    logger.exception("Error fatal en el hilo de muestreo")
 
-        sampler_thread = threading.Thread(target=_run_sampler, name="sampler", daemon=True)
-        sampler_thread.start()
+            thread = threading.Thread(target=_run_sampler, name="sampler", daemon=True)
+            thread.start()
+            return thread
+
+        sampler_thread = _start_sampler_thread()
+        sampler_thread_supervisor = SamplerThreadSupervisor(
+            config_manager,
+            sampler_engine=sampler_engine,
+            start_sampler=_start_sampler_thread,
+        )
+        sampler_thread_supervisor.attach_thread(sampler_thread)
+        sampler_thread_supervisor.start(shutdown)
         logger.info("Motor de muestreo iniciado en background")
     else:
         logger.info("Muestreo deshabilitado; servicio en modo espera")
@@ -96,6 +127,12 @@ def run_daemon() -> int:
         )
         resilience_supervisor.start(shutdown)
         logger.info("Supervisor de resiliencia iniciado")
+
+    watchdog: Watchdog | None = None
+    if config.resilience.enabled and config.resilience.watchdog_enabled and config.sampling.enabled:
+        watchdog = Watchdog(config_manager, sampler_engine=sampler_engine)
+        watchdog.start(shutdown)
+        logger.info("Watchdog de muestreo iniciado")
 
     bluetooth_service: BluetoothService | None = None
     if config.bluetooth.enabled:
@@ -117,14 +154,28 @@ def run_daemon() -> int:
         if sampler_thread.is_alive():
             logger.warning("El hilo de muestreo no terminó a tiempo")
 
+    if sampler_thread_supervisor is not None:
+        sampler_thread_supervisor.join(timeout=5)
+
     if resilience_supervisor is not None:
         resilience_supervisor.join(timeout=10)
+
+    if watchdog is not None:
+        watchdog.join(timeout=5)
 
     if bluetooth_service is not None:
         bluetooth_service.stop(shutdown)
 
     logger.info("NiloCardmed detenido correctamente")
     return 0
+
+
+def _captures_dir(config, env: EnvironmentSettings):
+    from pathlib import Path
+
+    if config.camera.capture_dir:
+        return Path(config.camera.capture_dir)
+    return env.data_dir / "captures"
 
 
 def _build_parser() -> argparse.ArgumentParser:

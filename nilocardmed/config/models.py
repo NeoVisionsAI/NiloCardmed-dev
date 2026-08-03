@@ -151,7 +151,7 @@ class SamplingSettings(BaseModel):
         default=True,
         description="Si false, solo captura sin enviar a SER",
     )
-    delete_capture_after_upload: bool = False
+    delete_capture_after_upload: bool = True
     keep_capture_on_upload_failure: bool = True
     initial_delay_seconds: float = Field(default=0.0, ge=0.0, le=3600.0)
     tick_sleep_seconds: float = Field(
@@ -196,6 +196,12 @@ class BluetoothSettings(BaseModel):
     tx_characteristic_uuid: str = "6e400012-b5a3-f393-e0a9-e50e24dcca9e"
     max_message_bytes: int = Field(default=512, ge=64, le=4096)
     token_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
+    privileged_ttl_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        description="Duración de sesión elevada tras reintroducir contraseña",
+    )
     require_auth: bool = True
     allowed_commands_without_auth: StrList = Field(default=["auth"])
     max_response_bytes: int = Field(
@@ -347,6 +353,80 @@ class ResilienceSettings(BaseModel):
         le=4096,
         description="0 = no comprobar memoria en health",
     )
+    watchdog_enabled: bool = Field(
+        default=True,
+        description="Reinicia el proceso si el muestreo queda colgado",
+    )
+    watchdog_max_stale_seconds: int = Field(
+        default=1800,
+        ge=60,
+        le=86400,
+        description="Segundos sin ciclo exitoso antes de reinicio",
+    )
+    watchdog_restart_exit_code: int = Field(default=75, ge=1, le=255)
+    pending_retry_interval_seconds: int = Field(
+        default=120,
+        ge=10,
+        le=3600,
+        description="Intervalo de reintento de cola pending",
+    )
+    disk_purge_check_interval_seconds: int = Field(default=60, ge=10, le=3600)
+    sampler_thread_supervisor_enabled: bool = Field(
+        default=True,
+        description="Reinicia el hilo de muestreo si muere o queda colgado",
+    )
+    sampler_thread_max_stale_seconds: int = Field(
+        default=600,
+        ge=60,
+        le=3600,
+        description="Segundos sin tick del sampler antes de reiniciar el hilo",
+    )
+    health_treat_wifi_provisioning_as_degraded: bool = Field(
+        default=True,
+        description="WiFi sin SSID o desconectado en provisioning = degraded, no unhealthy",
+    )
+
+
+class StorageSettings(BaseModel):
+    """Política de almacenamiento local de capturas."""
+
+    enabled: bool = True
+    pending_subdir: str = "pending"
+    pending_dir: str | None = Field(
+        default=None,
+        description="Ruta absoluta pending; None = DATA_DIR/pending_subdir",
+    )
+    min_free_percent: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=50.0,
+        description="Si libre < este %, borrar JPG más antiguos",
+    )
+    purge_oldest_when_low: bool = True
+    delete_after_successful_upload: bool = True
+    retry_pending_on_startup: bool = True
+    purge_pending_when_low: bool = Field(
+        default=False,
+        description="Si false, nunca purga pending/ aunque el disco esté bajo",
+    )
+    pending_upload_max_per_batch: int = Field(
+        default=1,
+        ge=1,
+        le=20,
+        description="Máximo de fotos pending subidas por tanda",
+    )
+    pending_upload_min_interval_seconds: float = Field(
+        default=45.0,
+        ge=5.0,
+        le=600.0,
+        description="Separación mínima entre subidas de pending",
+    )
+    pending_upload_outside_window_only: bool = Field(
+        default=True,
+        description="Durante ventana activa solo sube pending en huecos del intervalo",
+    )
+    pending_retry_backoff_base_seconds: float = Field(default=60.0, ge=10.0, le=3600.0)
+    pending_retry_backoff_max_seconds: float = Field(default=3600.0, ge=60.0, le=86400.0)
 
 
 class CameraSettings(BaseModel):
@@ -377,6 +457,35 @@ class CameraSettings(BaseModel):
     fswebcam_binary: str = "fswebcam"
     ffmpeg_binary: str = "ffmpeg"
     v4l2_ctl_binary: str = "v4l2-ctl"
+    output_width: int = Field(
+        default=1280,
+        ge=160,
+        le=7680,
+        description="Ancho objetivo tras procesado (reescalado)",
+    )
+    output_height: int = Field(
+        default=720,
+        ge=120,
+        le=4320,
+        description="Alto objetivo tras procesado (reescalado)",
+    )
+    resize_after_capture: bool = Field(
+        default=True,
+        description="Reescalar JPEG tras captura si supera output_*",
+    )
+    resize_only_if_larger: bool = Field(
+        default=True,
+        description="Solo reescalar si la captura es mayor que output_*",
+    )
+    jpeg_quality_after_resize: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Calidad JPEG tras reescalado; None = jpeg_quality",
+    )
+    capture_min_bytes: int = Field(default=1024, ge=256, le=1_000_000)
+    capture_max_attempts: int = Field(default=3, ge=1, le=10)
+    capture_retry_delay_seconds: float = Field(default=2.0, ge=0.5, le=15.0)
 
 
 class AppConfig(BaseModel):
@@ -388,6 +497,7 @@ class AppConfig(BaseModel):
     bluetooth: BluetoothSettings = Field(default_factory=BluetoothSettings)
     cardmed: CardMedSettings = Field(default_factory=CardMedSettings)
     resilience: ResilienceSettings = Field(default_factory=ResilienceSettings)
+    storage: StorageSettings = Field(default_factory=StorageSettings)
     camera: CameraSettings = Field(default_factory=CameraSettings)
 
 
@@ -413,6 +523,7 @@ class EnvironmentSettings(BaseSettings):
     bluetooth: BluetoothSettings = Field(default_factory=BluetoothSettings)
     cardmed: CardMedSettings = Field(default_factory=CardMedSettings)
     resilience: ResilienceSettings = Field(default_factory=ResilienceSettings)
+    storage: StorageSettings = Field(default_factory=StorageSettings)
     camera: CameraSettings = Field(default_factory=CameraSettings)
 
     @property
@@ -429,6 +540,7 @@ class EnvironmentSettings(BaseSettings):
             "bluetooth",
             "cardmed",
             "resilience",
+            "storage",
             "camera",
         ):
             section_env = getattr(self, section_name)

@@ -42,7 +42,7 @@ def run_health_cli(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     report = service.summary_dict()
-    healthy = report.get("healthy", False)
+    status = report.get("status", "unhealthy")
 
     if args.command == "status":
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -53,11 +53,11 @@ def run_health_cli(argv: list[str] | None = None) -> int:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
             for component in report.get("components", []):
-                status = "OK" if component.get("ok") else "FAIL"
-                print(f"{component.get('name')}: {status} — {component.get('message', '')}")
+                mark = "OK" if component.get("ok") else component.get("severity", "FAIL").upper()
+                print(f"{component.get('name')}: {mark} — {component.get('message', '')}")
             print("---")
-            print("Salud:", "OK" if healthy else "DEGRADED/FAIL")
-        if args.exit_code and not healthy:
+            print("Estado:", status.upper())
+        if args.exit_code and status == "unhealthy":
             return 1
         return 0
 

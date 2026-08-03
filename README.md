@@ -22,6 +22,8 @@ La configuración persistida se guarda en `data/config.json`. Las variables de e
 
 ## Docker y despliegue en Raspberry Pi (Fase 1)
 
+Guía paso a paso (recomendada): **[docs/DESPLIEGUE.md](docs/DESPLIEGUE.md)** — incluye checklist, logs y troubleshooting.
+
 ### Parametrización
 
 | Fichero | Propósito |
@@ -356,6 +358,7 @@ nilocardmed-cardmed test --skip-upload --json
 Módulo `nilocardmed/resilience/`: salud del sistema, reconexión WiFi automática y muestreo tolerante a fallos.
 
 - Despliegue Pi: [docs/DEPLOYMENT_PI.md](docs/DEPLOYMENT_PI.md)
+- **Guía rápida de despliegue:** [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md)
 - Operador (tablet): [docs/OPERATOR_GUIDE.md](docs/OPERATOR_GUIDE.md)
 
 ### Configuración (`NILOCARDMED_RESILIENCE__*`)
@@ -395,4 +398,49 @@ pytest -q
 - Límite RAM contenedor: **384M** (`docker-compose.pi.yml`)
 - Healthcheck Docker usa `health check --exit-code`
 - Tras reinicio: systemd → Docker → auto WiFi → muestreo + BLE
+
+## Almacenamiento, resolución y watchdog
+
+### Política de almacenamiento (`NILOCARDMED_STORAGE__*`)
+
+- Tras **upload OK** a SER: la foto se **elimina** del disco local.
+- Si SER no está accesible: la captura pasa a cola **`pending/`** y se reintenta periódicamente.
+- Si el espacio libre baja del **10%** (`MIN_FREE_PERCENT`): se borran las fotos **más antiguas** (pending + captures).
+
+### Resolución de imagen (`NILOCARDMED_CAMERA__OUTPUT_*`)
+
+- `WIDTH`/`HEIGHT`: resolución pedida a la cámara (V4L2).
+- `OUTPUT_WIDTH`/`OUTPUT_HEIGHT`: tamaño objetivo tras captura (~1K por defecto: 1280×720).
+- Si la cámara entrega más píxeles, se **reescala** con Pillow antes del envío.
+
+### Watchdog (`NILOCARDMED_RESILIENCE__WATCHDOG_*`)
+
+Si no hay ciclos exitosos en `WATCHDOG_MAX_STALE_SECONDS` (default 30 min), el proceso sale con código controlado; Docker (`unless-stopped`) lo relanza.
+
+### BLE adicional
+
+| Comando | Uso |
+|---------|-----|
+| `system_info` | Versión, uptime, disco |
+| `storage_status` | Espacio y cola pending |
+| `sampler_history` | Últimos ciclos de muestreo |
+| `events_list` | Eventos del sistema |
+| `time_get` / `time_sync` | Leer/ajustar hora desde tablet |
+
+Ver [docs/BLUETOOTH_PROTOCOL.md](docs/BLUETOOTH_PROTOCOL.md).
+
+### Endurecimiento adicional
+
+| Mejora | Comportamiento |
+|--------|----------------|
+| Watchdog inteligente | No reinicia si el muestreo está pausado (WiFi, ventana horaria) |
+| Config atómica + `secrets.json` | Contraseñas WiFi/BLE fuera de `config.json` (permisos 600) |
+| Pending protegido | La purga por disco no toca `pending/` por defecto |
+| Subida escalonada | 1 foto cada ≥45 s; fuera de ventana de monitorización drena la cola |
+| Timestamp de captura | Las fotos pending conservan `captured_at` original al subir |
+| Validación JPEG | Reintento automático (hasta 3×) si la captura es corrupta |
+| Health `degraded` | WiFi en provisioning no marca el contenedor como caído |
+| Telemetría JSONL | Eventos/ciclos persistidos en `DATA_DIR/telemetry.jsonl` |
+| Comandos BLE sensibles | Requieren contraseña o sesión elevada (1 h tras `auth`) |
+| Supervisor hilo sampler | Reinicia el hilo si muere inesperadamente |
 

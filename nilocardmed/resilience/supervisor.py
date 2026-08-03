@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 from nilocardmed.config.manager import ConfigManager
 from nilocardmed.config.models import EnvironmentSettings
 from nilocardmed.resilience.health import HealthService
+from nilocardmed.storage.manager import StorageManager
+from nilocardmed.telemetry.store import telemetry
 from nilocardmed.wifi.exceptions import WifiError
 from nilocardmed.wifi.service import WifiService
 
@@ -35,6 +37,8 @@ class ResilienceSupervisor:
         self._thread: threading.Thread | None = None
         self._last_health_log = 0.0
         self._last_wifi_attempt = 0.0
+        self._last_pending_retry = 0.0
+        self._last_disk_purge = 0.0
 
     def start(self, shutdown: threading.Event) -> None:
         if self._thread and self._thread.is_alive():
@@ -65,6 +69,7 @@ class ResilienceSupervisor:
 
             self._maybe_reconnect_wifi(config, resilience.wifi_reconnect_interval_seconds)
             self._maybe_log_health(config, resilience.log_health_summary_interval_seconds)
+            self._maybe_storage_maintenance(config)
 
             if shutdown.wait(timeout=max(resilience.supervisor_tick_seconds, 1.0)):
                 break
@@ -134,3 +139,52 @@ class ResilienceSupervisor:
             report.degraded,
             {c.name: c.ok for c in report.components},
         )
+
+    def _maybe_storage_maintenance(self, config) -> None:
+        if not config.storage.enabled:
+            return
+
+        storage = StorageManager(
+            config.storage,
+            self._env,
+            captures_dir=self._captures_dir(config),
+        )
+        now = time.monotonic()
+
+        retry_interval = config.resilience.pending_retry_interval_seconds
+        if now - self._last_pending_retry >= retry_interval:
+            self._last_pending_retry = now
+            from nilocardmed.sampler.window import evaluate_window
+
+            window_active = evaluate_window(config.sampling).active
+            result = storage.upload_pending_batch(config, window_active=window_active)
+            if result.get("uploaded", 0) > 0:
+                logger.info(
+                    "Cola pending: %s subidas, %s restantes",
+                    result["uploaded"],
+                    result.get("remaining", 0),
+                )
+                telemetry.record_event(
+                    "pending_retry",
+                    f"{result['uploaded']} capturas subidas desde pending",
+                    data=result,
+                )
+
+        purge_interval = config.resilience.disk_purge_check_interval_seconds
+        if now - self._last_disk_purge >= purge_interval:
+            self._last_disk_purge = now
+            purge = storage.enforce_disk_policy()
+            if purge.get("purged", 0) > 0:
+                logger.warning(
+                    "Purga por disco: %s archivos eliminados (%.1f%% libre)",
+                    purge["purged"],
+                    purge["free_percent"],
+                )
+                telemetry.record_event("disk_purge", "Purga por espacio bajo", data=purge)
+
+    def _captures_dir(self, config):
+        from pathlib import Path
+
+        if config.camera.capture_dir:
+            return Path(config.camera.capture_dir)
+        return self._env.data_dir / "captures"

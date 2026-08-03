@@ -272,6 +272,64 @@ Informe de salud del dispositivo (WiFi, cámara, SER, muestreo, disco, memoria).
 {"cmd":"health_status","token":"…","id":"30"}
 ```
 
+## Comandos sistema, almacenamiento y telemetría
+
+### `system_info`
+
+Versión, uptime, disco, memoria e hint de actualización.
+
+```json
+{"cmd":"system_info","token":"…","id":"40"}
+```
+
+### `storage_status`
+
+Espacio libre, umbral de purga (`min_free_percent`) y contadores de cola `pending`.
+
+```json
+{"cmd":"storage_status","token":"…","id":"41"}
+```
+
+### `sampler_history`
+
+Últimos ciclos de muestreo (buffer en memoria).
+
+```json
+{"cmd":"sampler_history","token":"…","limit":20,"id":"42"}
+```
+
+### `events_list`
+
+Eventos recientes (WiFi, storage, watchdog, time_sync…).
+
+```json
+{"cmd":"events_list","token":"…","limit":50,"id":"43"}
+```
+
+### `time_get`
+
+Hora actual del dispositivo (UTC).
+
+```json
+{"cmd":"time_get","token":"…","id":"44"}
+```
+
+**Respuesta:** `{"epoch":…,"iso8601":"…"}`
+
+### `time_sync`
+
+Sincroniza la hora del sistema desde el tablet. Requiere `cap_add: SYS_TIME` en Docker.
+
+```json
+{"cmd":"time_sync","token":"…","password":"…","epoch":1735689600,"id":"45"}
+```
+
+**Comandos privilegiados** (requieren contraseña en la petición o sesión elevada tras `auth` válida durante 1 h):
+
+`wifi_connect`, `time_sync`, `cardmed_configure`, `sampling_set_interval`, `sampling_set_window`
+
+**Errores:** `privileged_auth_required`, `time_sync_failed`
+
 ## Extensibilidad (Fase 9+)
 
 Nuevos comandos se registran en `nilocardmed/bluetooth/handlers.py` y `nilocardmed/cardmed/handlers.py`. Convenciones:

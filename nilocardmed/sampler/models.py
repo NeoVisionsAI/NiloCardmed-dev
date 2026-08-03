@@ -21,6 +21,7 @@ class SampleCycleResult:
     capture_error: str | None = None
     upload_error: str | None = None
     skipped_upload: bool = False
+    storage_action: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +33,7 @@ class SampleCycleResult:
             "capture_error": self.capture_error,
             "upload_error": self.upload_error,
             "skipped_upload": self.skipped_upload,
+            "storage_action": self.storage_action,
         }
 
 

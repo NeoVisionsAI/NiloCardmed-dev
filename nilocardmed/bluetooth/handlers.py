@@ -21,6 +21,14 @@ from nilocardmed.cardmed.handlers import (
     handle_cardmed_test,
 )
 from nilocardmed.resilience.handlers import handle_health_status
+from nilocardmed.system.handlers import (
+    handle_events_list,
+    handle_sampler_history,
+    handle_storage_status,
+    handle_system_info,
+    handle_time_get,
+    handle_time_sync,
+)
 from nilocardmed.sampler.window import evaluate_window
 from nilocardmed.wifi.exceptions import WifiError
 from nilocardmed.wifi.service import WifiService
@@ -46,6 +54,7 @@ def handle_auth(ctx: CommandContext, request: CommandRequest) -> dict[str, Any]:
     if password != expected:
         raise BluetoothCommandError("invalid_password")
     token, expires_in = ctx.sessions.issue_token()
+    ctx.privileged.elevate(token)
     return {"token": token, "expires_in": expires_in, "device_name": ctx.settings.device_name}
 
 
@@ -250,6 +259,12 @@ def register_operation_handlers(router) -> None:
         ("cardmed_configure", handle_cardmed_configure, ["configure_cardmed", "configurar"]),
         ("cardmed_test", handle_cardmed_test, ["probar_cardmed", "test_cardmed", "probar"]),
         ("health_status", handle_health_status, ["health", "system_health"]),
+        ("system_info", handle_system_info, []),
+        ("storage_status", handle_storage_status, []),
+        ("sampler_history", handle_sampler_history, []),
+        ("events_list", handle_events_list, []),
+        ("time_get", handle_time_get, []),
+        ("time_sync", handle_time_sync, []),
     ]
 
     for name, handler, aliases in definitions:

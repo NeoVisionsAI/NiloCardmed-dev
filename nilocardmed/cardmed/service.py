@@ -23,6 +23,7 @@ from nilocardmed.config.models import AppConfig, CardMedSettings, EnvironmentSet
 from nilocardmed.ser_client.client import SerClient
 from nilocardmed.ser_client.exceptions import SerUploadError
 from nilocardmed.ser_client.models import SamplePayload
+from nilocardmed.storage.manager import StorageManager
 from nilocardmed.wifi.exceptions import WifiError
 from nilocardmed.wifi.service import WifiService
 
@@ -191,6 +192,19 @@ class CardMedService:
             upload_dict = upload_result.to_dict()
         except SerUploadError as exc:
             steps.append(TestStep("upload", False, str(exc)))
+            storage = StorageManager(
+                config.storage,
+                self._env,
+                captures_dir=self._captures_dir(config),
+            )
+            storage.handle_after_upload(
+                config,
+                capture.output_path,
+                captured_at=capture.captured_at,
+                upload=None,
+                upload_error=str(exc),
+                metadata=metadata,
+            )
             return TestResult(
                 success=False,
                 steps=steps,
@@ -199,6 +213,19 @@ class CardMedService:
             )
 
         if not upload_result.success:
+            storage = StorageManager(
+                config.storage,
+                self._env,
+                captures_dir=self._captures_dir(config),
+            )
+            storage.handle_after_upload(
+                config,
+                capture.output_path,
+                captured_at=capture.captured_at,
+                upload=upload_result,
+                upload_error=upload_result.error,
+                metadata=metadata,
+            )
             steps.append(
                 TestStep(
                     "upload",
@@ -224,8 +251,25 @@ class CardMedService:
             )
         )
 
-        if cardmed.test_delete_capture_after_success:
-            self._delete_capture(capture.output_path)
+        storage = StorageManager(
+            config.storage,
+            self._env,
+            captures_dir=self._captures_dir(config),
+        )
+        storage_action = storage.handle_after_upload(
+            config,
+            capture.output_path,
+            captured_at=capture.captured_at,
+            upload=upload_result,
+            upload_error=None,
+            metadata=metadata,
+        )
+        if storage_action == "deleted":
+            capture_info["output_path"] = None
+        elif storage_action == "queued":
+            capture_info["output_path"] = str(
+                storage.pending_dir / capture.output_path.name
+            )
 
         return TestResult(
             success=True,
@@ -260,9 +304,7 @@ class CardMedService:
             "ser_url": config.ser.url,
         }
 
-    @staticmethod
-    def _delete_capture(path: Path) -> None:
-        try:
-            path.unlink(missing_ok=True)
-        except OSError as exc:
-            logger.warning("No se pudo eliminar captura de prueba %s: %s", path, exc)
+    def _captures_dir(self, config: AppConfig) -> Path:
+        if config.camera.capture_dir:
+            return Path(config.camera.capture_dir)
+        return self._env.data_dir / "captures"

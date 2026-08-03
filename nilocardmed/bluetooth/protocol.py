@@ -13,6 +13,7 @@ from nilocardmed.bluetooth.capture_cache import CaptureCache
 from nilocardmed.bluetooth.command_errors import BluetoothCommandError
 from nilocardmed.bluetooth.exceptions import BluetoothAuthError, BluetoothProtocolError
 from nilocardmed.bluetooth.models import CommandRequest, CommandResponse
+from nilocardmed.bluetooth.privileged import PRIVILEGED_COMMANDS, PrivilegedSessionStore, passwords_match
 from nilocardmed.config.manager import ConfigManager
 from nilocardmed.config.models import BluetoothSettings, EnvironmentSettings
 
@@ -30,6 +31,7 @@ class CommandContext:
     env: EnvironmentSettings
     sessions: AuthSessionStore
     capture_cache: CaptureCache
+    privileged: PrivilegedSessionStore
 
 
 class CommandRouter:
@@ -103,6 +105,22 @@ class CommandRouter:
                 error="unauthorized",
             )
 
+        if request.cmd in PRIVILEGED_COMMANDS:
+            token = request.token
+            if not self._context.privileged.is_privileged(token):
+                password = request.payload.get("password")
+                expected = settings.password.get_secret_value()
+                if passwords_match(str(password) if password is not None else None, expected):
+                    if token:
+                        self._context.privileged.elevate(token)
+                else:
+                    return CommandResponse(
+                        ok=False,
+                        cmd=request.cmd,
+                        id=request.id,
+                        error="privileged_auth_required",
+                    )
+
         handler = self._handlers.get(request.cmd)
         if handler is None:
             return CommandResponse(
@@ -142,12 +160,14 @@ def build_router(
     from nilocardmed.bluetooth.handlers import register_operation_handlers
 
     sessions = AuthSessionStore(token_ttl_seconds=settings.token_ttl_seconds)
+    privileged = PrivilegedSessionStore(privileged_ttl_seconds=settings.privileged_ttl_seconds)
     context = CommandContext(
         settings=settings,
         config_manager=config_manager,
         env=env,
         sessions=sessions,
         capture_cache=CaptureCache(),
+        privileged=privileged,
     )
     router = CommandRouter(context)
     register_operation_handlers(router)

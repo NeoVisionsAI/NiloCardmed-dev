@@ -17,6 +17,8 @@ from nilocardmed.sampler.window import WindowPhase, evaluate_window
 from nilocardmed.ser_client.client import SerClient
 from nilocardmed.ser_client.exceptions import SerUploadError
 from nilocardmed.ser_client.models import SamplePayload
+from nilocardmed.storage.manager import StorageManager
+from nilocardmed.telemetry.store import telemetry
 from nilocardmed.wifi.exceptions import WifiError
 from nilocardmed.wifi.service import WifiService
 
@@ -70,17 +72,30 @@ class SamplerEngine:
             while not shutdown.is_set():
                 config = self._reload_config_if_needed()
                 sampling = config.sampling
+                storage = StorageManager(
+                    config.storage,
+                    self._env,
+                    captures_dir=_captures_dir(config, self._env),
+                )
 
                 if not sampling.enabled:
+                    telemetry.record_sampler_tick(pause_reason="disabled")
                     logger.debug("Muestreo deshabilitado; esperando...")
                     if self._wait(
-                        shutdown, sampling.tick_sleep_seconds, sampling.tick_sleep_seconds
+                        shutdown,
+                        sampling.tick_sleep_seconds,
+                        sampling.tick_sleep_seconds,
+                        config=config,
+                        pending_mode="drain",
+                        storage=storage,
                     ):
                         break
                     continue
 
                 window = evaluate_window(sampling)
                 if not window.active:
+                    pause = window.phase.value
+                    telemetry.record_sampler_tick(pause_reason=pause)
                     if window.phase == WindowPhase.AFTER_END:
                         if sampling.after_window_behavior == "stop":
                             logger.info("Ventana de monitorización finalizada")
@@ -88,7 +103,12 @@ class SamplerEngine:
                             return
                         logger.info("Ventana finalizada; modo idle")
                         if self._wait(
-                            shutdown, sampling.tick_sleep_seconds, sampling.tick_sleep_seconds
+                            shutdown,
+                            sampling.tick_sleep_seconds,
+                            sampling.tick_sleep_seconds,
+                            config=config,
+                            pending_mode="drain",
+                            storage=storage,
                         ):
                             break
                         continue
@@ -103,11 +123,15 @@ class SamplerEngine:
                         shutdown,
                         min(wait_seconds, sampling.tick_sleep_seconds),
                         sampling.tick_sleep_seconds,
+                        config=config,
+                        pending_mode="drain",
+                        storage=storage,
                     ):
                         break
                     continue
 
-                cycle = self.run_once(config)
+                telemetry.record_sampler_tick(pause_reason=None)
+                cycle = self.run_once(config, storage=storage)
                 if self._record_cycle(cycle, sampling):
                     self._stop("max_consecutive_failures")
                     return
@@ -116,16 +140,33 @@ class SamplerEngine:
                 if not cycle.success and sampling.failure_backoff_seconds > 0:
                     sleep_seconds += sampling.failure_backoff_seconds
 
-                if self._wait(shutdown, sleep_seconds, sampling.tick_sleep_seconds):
+                if self._wait(
+                    shutdown,
+                    sleep_seconds,
+                    sampling.tick_sleep_seconds,
+                    config=config,
+                    pending_mode="interval",
+                    storage=storage,
+                ):
                     break
         finally:
             if self.state.running:
                 self._stop("shutdown")
 
-    def run_once(self, config: AppConfig | None = None) -> SampleCycleResult:
+    def run_once(
+        self,
+        config: AppConfig | None = None,
+        *,
+        storage: StorageManager | None = None,
+    ) -> SampleCycleResult:
         """Ejecuta un único ciclo de captura y envío."""
         config = config or self._config_manager.get()
         sampling = config.sampling
+        storage = storage or StorageManager(
+            config.storage,
+            self._env,
+            captures_dir=_captures_dir(config, self._env),
+        )
 
         precheck = self._precheck_cycle(config)
         if precheck is not None:
@@ -165,23 +206,36 @@ class SamplerEngine:
             )
 
         if should_upload:
-            success = upload_error is None and upload_result is not None
+            success = upload_error is None and upload_result is not None and upload_result.success
         else:
             success = True
 
-        if success and upload_result and sampling.delete_capture_after_upload:
-            self._delete_capture(capture.output_path, keep=False)
-        elif not success and not sampling.keep_capture_on_upload_failure:
-            self._delete_capture(capture.output_path, keep=False)
+        storage_action = storage.handle_after_upload(
+            config,
+            capture.output_path,
+            captured_at=capture.captured_at,
+            upload=upload_result,
+            upload_error=upload_error,
+        )
+        capture_path_str = str(capture.output_path)
+        if storage_action == "queued":
+            capture_path_str = str(storage.pending_dir / capture.output_path.name)
+            telemetry.record_event(
+                "storage_queued",
+                f"Captura encolada: {capture.output_path.name}",
+            )
+        elif storage_action == "deleted":
+            capture_path_str = None
 
         return SampleCycleResult(
             success=success,
-            capture_path=str(capture.output_path),
+            capture_path=capture_path_str,
             capture_backend=capture.backend,
             captured_at=capture.captured_at,
             upload=upload_result,
             upload_error=upload_error,
             skipped_upload=skipped_upload,
+            storage_action=storage_action,
         )
 
     def _precheck_cycle(self, config: AppConfig) -> SampleCycleResult | None:
@@ -225,6 +279,7 @@ class SamplerEngine:
 
     def _record_cycle(self, cycle: SampleCycleResult, sampling: SamplingSettings) -> bool:
         """Registra el ciclo. Devuelve True si el muestreo debe detenerse."""
+        telemetry.record_cycle(cycle)
         with self._lock:
             self._state.cycles_total += 1
             self._state.last_cycle = cycle
@@ -269,11 +324,24 @@ class SamplerEngine:
 
         return self._config_manager.get()
 
-    @staticmethod
-    def _wait(shutdown: threading.Event, seconds: float, tick: float) -> bool:
-        """Espera interruptible. Devuelve True si se solicitó apagado."""
+    def _wait(
+        self,
+        shutdown: threading.Event,
+        seconds: float,
+        tick: float,
+        *,
+        config: AppConfig | None = None,
+        pending_mode: str | None = None,
+        storage: StorageManager | None = None,
+    ) -> bool:
+        """Espera interruptible; opcionalmente drena pending en huecos."""
         deadline = time.monotonic() + max(seconds, 0)
         while not shutdown.is_set():
+            if storage and config and pending_mode:
+                if pending_mode == "interval":
+                    storage.upload_pending_during_interval(config)
+                elif pending_mode == "drain":
+                    storage.upload_pending_batch(config, window_active=False)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
@@ -303,3 +371,9 @@ class SamplerEngine:
             self._state.running = False
             self._state.stop_reason = reason
         logger.info("Muestreo detenido (%s)", reason)
+
+
+def _captures_dir(config: AppConfig, env: EnvironmentSettings) -> Path:
+    if config.camera.capture_dir:
+        return Path(config.camera.capture_dir)
+    return env.data_dir / "captures"

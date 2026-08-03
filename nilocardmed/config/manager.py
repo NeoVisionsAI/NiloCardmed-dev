@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, SecretStr
 
 from nilocardmed.config.models import AppConfig, EnvironmentSettings
+from nilocardmed.config.secrets import (
+    apply_secrets_to_config,
+    extract_secrets,
+    load_secrets_file,
+    merge_secrets_into_raw,
+    save_secrets_file,
+    secrets_path,
+    strip_secrets_from_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,29 +59,40 @@ class ConfigManager:
         if self.config_path.exists():
             logger.info("Cargando configuración desde %s", self.config_path)
             raw = json.loads(self.config_path.read_text(encoding="utf-8"))
+            secrets = load_secrets_file(secrets_path(self._env.data_dir))
+            raw = merge_secrets_into_raw(raw, secrets)
             config = AppConfig.model_validate(raw)
         else:
             logger.info("No existe configuración previa; usando valores por defecto")
             config = AppConfig()
-
+            secrets = load_secrets_file(secrets_path(self._env.data_dir))
+            config = apply_secrets_to_config(config, secrets)
         config = self._env.apply_to(config)
         self._config = config
         return config
 
     def save(self, config: AppConfig | None = None) -> None:
-        """Persiste la configuración actual en disco."""
+        """Persiste la configuración actual en disco (atómica, secretos separados)."""
         config = config or self._config
         if config is None:
             raise RuntimeError("No hay configuración cargada para guardar")
 
         self._env.data_dir.mkdir(parents=True, exist_ok=True)
         payload = _dump_for_storage(config)
-        self.config_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        save_secrets_file(secrets_path(self._env.data_dir), extract_secrets(config))
+        public_payload = strip_secrets_from_payload(payload)
+        self._atomic_write_json(self.config_path, public_payload)
         self._config = config
         logger.info("Configuración guardada en %s", self.config_path)
+
+    @staticmethod
+    def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+        tmp.write_text(text, encoding="utf-8")
+        with tmp.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
 
     def get(self) -> AppConfig:
         """Devuelve la configuración en memoria, cargándola si es necesario."""
@@ -126,6 +147,11 @@ class ConfigManager:
                 "wifi_reconnect_enabled": config.resilience.wifi_reconnect_enabled,
                 "pause_sampling_without_wifi": config.resilience.pause_sampling_without_wifi,
                 "pause_sampling_without_camera": config.resilience.pause_sampling_without_camera,
+            },
+            "storage": {
+                "enabled": config.storage.enabled,
+                "min_free_percent": config.storage.min_free_percent,
+                "purge_pending_when_low": config.storage.purge_pending_when_low,
             },
             "camera": config.camera.model_dump(),
         }
