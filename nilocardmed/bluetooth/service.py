@@ -30,6 +30,7 @@ class BluetoothService:
         self._backend: BluetoothBackend | None = None
         self._thread: threading.Thread | None = None
         self._shutdown = threading.Event()
+        self._master_shutdown: threading.Event | None = None
 
     @property
     def router(self) -> CommandRouter:
@@ -52,12 +53,12 @@ class BluetoothService:
             logger.info("Bluetooth deshabilitado; no se inicia GATT")
             return
 
-        master_shutdown = shutdown or self._shutdown
+        self._master_shutdown = shutdown or self._shutdown
         backend = self.backend
 
         def _runner() -> None:
             logger.info("Iniciando servicio Bluetooth (backend=%s)", backend.name)
-            backend.start(master_shutdown)
+            backend.start(self._master_shutdown)
 
         self._thread = threading.Thread(target=_runner, name="bluetooth", daemon=True)
         self._thread.start()
@@ -65,10 +66,29 @@ class BluetoothService:
     def stop(self, shutdown: threading.Event | None = None) -> None:
         target = shutdown or self._shutdown
         target.set()
+        self._stop_backend()
+
+    def restart(self, shutdown: threading.Event | None = None) -> None:
+        """Reinicia el backend BLE sin apagar el resto del daemon."""
+        master = shutdown or self._master_shutdown or self._shutdown
+        logger.info("Reiniciando servicio Bluetooth")
+        self._stop_backend()
+        self._backend = None
+        self.start(master)
+
+    def is_healthy(self) -> bool:
+        if not self.settings.enabled:
+            return True
+        if self._backend is None:
+            return False
+        return self._backend.is_healthy()
+
+    def _stop_backend(self) -> None:
         if self._backend is not None:
             self._backend.stop()
         if self._thread is not None:
-            self._thread.join(timeout=10)
+            self._thread.join(timeout=15)
+        self._thread = None
 
     def process_mock(self, raw: bytes | str) -> bytes:
         """Procesa un mensaje usando backend mock (tests/CLI)."""

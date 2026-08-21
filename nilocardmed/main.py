@@ -22,6 +22,7 @@ from nilocardmed.wifi.exceptions import WifiError
 from nilocardmed.wifi.service import WifiService
 from nilocardmed.bluetooth.cli import run_bluetooth_cli
 from nilocardmed.bluetooth.service import BluetoothService
+from nilocardmed.bluetooth.supervisor import BluetoothSupervisor
 from nilocardmed.cardmed.cli import run_cardmed_cli
 from nilocardmed.resilience.cli import run_health_cli
 from nilocardmed.resilience.supervisor import ResilienceSupervisor
@@ -137,6 +138,7 @@ def run_daemon() -> int:
         logger.info("Watchdog de muestreo iniciado")
 
     bluetooth_service: BluetoothService | None = None
+    bluetooth_supervisor: BluetoothSupervisor | None = None
     if config.bluetooth.enabled:
         bluetooth_service = BluetoothService(config.bluetooth, config_manager, env)
         bluetooth_service.start(shutdown)
@@ -145,6 +147,10 @@ def run_daemon() -> int:
             bluetooth_service.backend.name,
             config.bluetooth.device_name,
         )
+        if config.resilience.enabled and config.resilience.bluetooth_supervisor_enabled:
+            bluetooth_supervisor = BluetoothSupervisor(config_manager, bluetooth_service)
+            bluetooth_supervisor.start(shutdown)
+            logger.info("Supervisor Bluetooth iniciado (reinicio automático GATT)")
     else:
         logger.info("Bluetooth deshabilitado")
 
@@ -164,6 +170,9 @@ def run_daemon() -> int:
 
     if watchdog is not None:
         watchdog.join(timeout=5)
+
+    if bluetooth_supervisor is not None:
+        bluetooth_supervisor.join(timeout=5)
 
     if bluetooth_service is not None:
         bluetooth_service.stop(shutdown)

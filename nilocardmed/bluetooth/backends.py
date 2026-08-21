@@ -27,6 +27,7 @@ class BluetoothBackend(ABC):
         self.settings = settings
         self.router = router
         self._transport = BleTransport(router, settings)
+        self._local_stop = threading.Event()
 
     @abstractmethod
     def start(self, shutdown: threading.Event) -> None:
@@ -35,6 +36,13 @@ class BluetoothBackend(ABC):
     @abstractmethod
     def stop(self) -> None:
         raise NotImplementedError
+
+    def is_healthy(self) -> bool:
+        """Indica si el backend sigue publicando GATT."""
+        return True
+
+    def _should_stop(self, shutdown: threading.Event) -> bool:
+        return shutdown.is_set() or self._local_stop.is_set()
 
     def process_frames(self, raw: bytes | str) -> list[bytes]:
         data = raw if isinstance(raw, bytes) else raw.encode("utf-8")
@@ -72,27 +80,52 @@ class BluezBluetoothBackend(BluetoothBackend):
     def __init__(self, settings: BluetoothSettings, router: CommandRouter) -> None:
         super().__init__(settings, router)
         self._thread: threading.Thread | None = None
+        self._publish_thread: threading.Thread | None = None
         self._tx_characteristic = None
         self._last_response = bytearray()
         self._peripheral = None
+        self._gatt_registered = threading.Event()
+        self._master_shutdown: threading.Event | None = None
 
     def start(self, shutdown: threading.Event) -> None:
         if self._thread and self._thread.is_alive():
             return
 
+        self._local_stop.clear()
+        self._gatt_registered.clear()
+        self._master_shutdown = shutdown
+
         def _runner() -> None:
             try:
                 self._run_peripheral(shutdown)
             except Exception:
-                logger.exception("Error en backend BlueZ")
-                shutdown.set()
+                logger.exception("Error en backend BlueZ (se reintentará vía supervisor)")
+            finally:
+                self._gatt_registered.clear()
+                self._publish_thread = None
+                self._tx_characteristic = None
 
         self._thread = threading.Thread(target=_runner, name="bluetooth-bluez", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
+        self._local_stop.set()
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=5)
+            self._thread.join(timeout=10)
+        self._thread = None
+        self._publish_thread = None
+        self._tx_characteristic = None
+        self._gatt_registered.clear()
+        self._local_stop.clear()
+
+    def is_healthy(self) -> bool:
+        if self._thread is None or not self._thread.is_alive():
+            return False
+        if not self._gatt_registered.is_set():
+            return False
+        if self._publish_thread is not None and not self._publish_thread.is_alive():
+            return False
+        return True
 
     def _run_peripheral(self, shutdown: threading.Event) -> None:
         try:
@@ -163,10 +196,33 @@ class BluezBluetoothBackend(BluetoothBackend):
         )
 
         publish_thread = threading.Thread(target=ble.publish, name="bluezero-publish", daemon=True)
+        self._publish_thread = publish_thread
         publish_thread.start()
 
-        while not shutdown.wait(timeout=1):
-            pass
+        stable_since: float | None = None
+        registration_deadline = time.monotonic() + 30.0
+        while time.monotonic() < registration_deadline:
+            if self._should_stop(shutdown):
+                return
+            if not publish_thread.is_alive():
+                raise BluetoothBackendError("Publicación GATT terminó antes de registrarse")
+            if stable_since is None:
+                stable_since = time.monotonic()
+            elif time.monotonic() - stable_since >= 2.0:
+                self._gatt_registered.set()
+                logger.info("GATT BLE registrado y publicando")
+                break
+            time.sleep(0.5)
+
+        if not self._gatt_registered.is_set() and not self._should_stop(shutdown):
+            raise BluetoothBackendError("Timeout esperando registro GATT")
+
+        while not self._should_stop(shutdown):
+            if not publish_thread.is_alive():
+                logger.error("Hilo publish GATT terminó inesperadamente")
+                self._gatt_registered.clear()
+                break
+            shutdown.wait(timeout=1.0)
 
         logger.info("Apagado solicitado; deteniendo publicación BLE")
 

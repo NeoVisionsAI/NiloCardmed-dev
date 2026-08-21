@@ -398,6 +398,22 @@ class ResilienceSettings(BaseModel):
         le=3600,
         description="Segundos sin tick del sampler antes de reiniciar el hilo",
     )
+    bluetooth_supervisor_enabled: bool = Field(
+        default=True,
+        description="Reinicia publicación GATT BLE si el hilo BlueZ muere o deja de anunciar",
+    )
+    bluetooth_health_check_interval_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=600,
+        description="Intervalo de comprobación de salud BLE",
+    )
+    bluetooth_restart_cooldown_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=3600,
+        description="Mínimo entre reinicios automáticos del backend BLE",
+    )
     health_treat_wifi_provisioning_as_degraded: bool = Field(
         default=True,
         description="WiFi sin SSID o desconectado en provisioning = degraded, no unhealthy",
