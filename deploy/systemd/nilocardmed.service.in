@@ -10,6 +10,7 @@ Type=oneshot
 RemainAfterExit=yes
 User=@NILOCARDMED_RUN_USER@
 Group=@NILOCARDMED_RUN_GROUP@
+SupplementaryGroups=docker
 WorkingDirectory=@INSTALL_DIR@
 Environment=COMPOSE_PROJECT_NAME=@COMPOSE_PROJECT_NAME@
 Environment=COMPOSE_FILE=@COMPOSE_FILE@

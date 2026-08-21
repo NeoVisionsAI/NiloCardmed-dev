@@ -47,7 +47,7 @@ fi
 export INSTALL_DIR="${INSTALL_DIR:-${REPO_ROOT}}"
 export DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-${INSTALL_DIR}/deploy.env}"
 
-# Usuario de ejecución (deploy.env.example → deploy.env → sudo user)
+# Usuario de ejecución: priorizar quien ejecuta sudo, no "pi" de la plantilla
 RUN_USER="${SUDO_USER:-$(id -un)}"
 if [[ -f "${REPO_ROOT}/deploy.env" ]]; then
   # shellcheck disable=SC1091
@@ -58,6 +58,9 @@ elif [[ -f "${REPO_ROOT}/deploy.env.example" ]]; then
   source "${REPO_ROOT}/deploy.env.example" 2>/dev/null || true
   RUN_USER="${NILOCARDMED_RUN_USER:-${RUN_USER}}"
 fi
+NILOCARDMED_RUN_USER="${RUN_USER}"
+resolve_run_user "${SUDO_USER:-root}"
+RUN_USER="${NILOCARDMED_RUN_USER}"
 
 log_info "Instalando NiloCardmed en ${INSTALL_DIR} (usuario: ${RUN_USER})"
 
@@ -94,6 +97,7 @@ source "${INSTALL_DIR}/scripts/lib/setup-env.sh"
 setup_deploy_and_app_env "${INSTALL_DIR}"
 
 load_deploy_env
+ensure_run_user_groups "${NILOCARDMED_RUN_USER}"
 ensure_host_directories
 
 INSTALL_DIR="${INSTALL_DIR}" DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE}" \
@@ -121,6 +125,9 @@ log_info "Instalando unidad systemd: ${service_path}"
 render_template \
   "${INSTALL_DIR}/deploy/systemd/nilocardmed.service.in" \
   "${service_path}"
+
+# Asegurar acceso a docker.sock para el usuario del servicio
+ensure_run_user_groups "${NILOCARDMED_RUN_USER}"
 
 systemctl daemon-reload
 systemctl enable "${NILOCARDMED_SERVICE_NAME}.service"

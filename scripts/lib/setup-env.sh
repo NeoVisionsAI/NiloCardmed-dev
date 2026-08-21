@@ -95,6 +95,7 @@ prompt_bluetooth_password() {
   existing="$(read_env_value "${env_file}" "NILOCARDMED_BLUETOOTH__PASSWORD" || true)"
 
   local password=""
+  local confirm=""
   if [[ -t 0 ]] || [[ -r /dev/tty ]]; then
     if [[ -n "${existing}" && "${existing}" != "changeme" ]]; then
       read -rsp "Contraseña Bluetooth [Enter=mantener la actual]: " password </dev/tty || true
@@ -108,7 +109,30 @@ prompt_bluetooth_password() {
     else
       read -rsp "Contraseña Bluetooth [Enter=generar automática]: " password </dev/tty || true
       echo >/dev/tty
+      if [[ -z "${password}" ]]; then
+        password="$(generate_bluetooth_password)"
+        log_info "Contraseña Bluetooth generada: ${password}"
+        log_info "Guárdala: la necesitarás en la app tablet."
+        export BLUETOOTH_PASSWORD="${password}"
+        return 0
+      fi
     fi
+
+    while true; do
+      read -rsp "Repite la contraseña Bluetooth: " confirm </dev/tty || true
+      echo >/dev/tty
+      if [[ "${password}" == "${confirm}" ]]; then
+        break
+      fi
+      log_error "Las contraseñas no coinciden. Vuelve a intentarlo."
+      while [[ -z "${password}" ]]; do
+        read -rsp "Contraseña Bluetooth: " password </dev/tty || true
+        echo >/dev/tty
+        if [[ -z "${password}" ]]; then
+          log_error "La contraseña no puede estar vacía (Enter solo en el primer prompt para generar o mantener)."
+        fi
+      done
+    done
   fi
 
   if [[ -z "${password}" ]]; then
