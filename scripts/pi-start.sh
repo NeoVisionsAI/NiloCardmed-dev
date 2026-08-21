@@ -35,6 +35,7 @@ Comandos:
   start     check + generar override + docker compose up -d
   install   check + install.sh (systemd, arranque automático al boot)
   status    Estado del contenedor y salud
+  stop      docker compose down (usa deploy.env, proyecto nilocardmed)
   logs      docker compose logs -f --tail=100
   trace     Solo traza operativa (BLE, WiFi, config) en tiempo real
 
@@ -65,6 +66,10 @@ parse_args() {
       ;;
     status)
       cmd_status
+      exit 0
+      ;;
+    stop)
+      cmd_stop
       exit 0
       ;;
     logs)
@@ -321,21 +326,32 @@ start_stack() {
 cmd_status() {
   load_deploy_env
   cd "${INSTALL_DIR}"
+  export COMPOSE_PROJECT_NAME COMPOSE_FILE
   compose_cmd ps 2>/dev/null || docker ps --filter name=nilocardmed
   echo "---"
   compose_cmd exec -T "${COMPOSE_SERVICE_NAME}" \
     python -m nilocardmed.main health status 2>/dev/null || true
 }
 
+cmd_stop() {
+  load_deploy_env
+  cd "${INSTALL_DIR}"
+  export COMPOSE_PROJECT_NAME COMPOSE_FILE
+  log_info "Parando proyecto Docker '${COMPOSE_PROJECT_NAME}' en ${INSTALL_DIR}"
+  compose_cmd down --remove-orphans
+}
+
 cmd_logs() {
   load_deploy_env
   cd "${INSTALL_DIR}"
+  export COMPOSE_PROJECT_NAME COMPOSE_FILE
   compose_cmd logs -f --tail=100
 }
 
 cmd_trace() {
   load_deploy_env
   cd "${INSTALL_DIR}"
+  export COMPOSE_PROJECT_NAME COMPOSE_FILE
   log_info "Traza operativa (Ctrl+C para salir). Filtro: nilocardmed.trace y mensajes TRACE"
   compose_cmd logs -f --tail=50 2>&1 | grep --line-buffered -E 'nilocardmed\.trace| TRACE |Cliente BLE|WiFi conectado|autenticación BLE|bluetooth_activo|\[ble\]|\[wifi\]|\[config\]|\[system\]'
 }
