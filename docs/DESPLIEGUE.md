@@ -60,7 +60,11 @@ cd /opt/nilocardmed-src
 
 ## 3. Configuración (solo dos ficheros)
 
-### 3.1 Copiar plantillas
+### 3.1 Copiar plantillas (automático con `install.sh`)
+
+**`sudo ./scripts/install.sh`** crea `deploy.env` y `.env` desde las plantillas, activa WiFi/BLE, genera un **uuid único por dispositivo** (persistente en `HOST_DATA_DIR/device-identity.env`), lo usa como **`NILOCARDMED_SER__DEVICE_ID`** en las peticiones al servidor y como nombre BLE **`NiloCardmed-<uuid>`**, y pide la **contraseña Bluetooth** por consola (Enter = genera una y la muestra).
+
+Manual (solo si no usas `install.sh`):
 
 ```bash
 cp .env.example .env
@@ -86,17 +90,25 @@ RESTART_POLICY=unless-stopped
 
 ### 3.3 Editar `.env` (aplicación) — mínimo en fábrica
 
-**No hace falta poner WiFi aquí.** El operador lo configurará desde la tablet (`wifi_scan` → `wifi_connect`). Lo mismo con intervalo de muestreo, ventana horaria y datos CardMed.
-
-Lo imprescindible **antes del primer arranque** (en fábrica):
+Con **`install.sh`**, la contraseña BLE y el nombre del dispositivo se configuran en la instalación. Solo conviene revisar **`NILOCARDMED_SER__URL`** (antes o después del install):
 
 ```bash
-# Contraseña BLE — el operador la usará en la app (¡cambiar changeme!)
+nano .env   # NILOCARDMED_SER__URL=https://tu-servidor/api/samples
+```
+
+En **reinstalaciones**, el uuid del dispositivo se mantiene si existe `device-identity.env` (mismo id en SER y en el nombre BLE). Al pedir contraseña: Enter = mantener la actual; Enter sin contraseña previa = generar nueva.
+
+**No hace falta poner WiFi aquí.** El operador lo configurará desde la tablet (`wifi_scan` → `wifi_connect`). Lo mismo con intervalo de muestreo, ventana horaria y datos CardMed.
+
+Si configuras `.env` a mano (sin `install.sh`), lo imprescindible **antes del primer arranque**:
+
+```bash
+# Contraseña BLE — el operador la usará en la app
 NILOCARDMED_BLUETOOTH__PASSWORD=tu-contraseña-segura
 
 # Servidor SER (destino de las fotos)
 NILOCARDMED_SER__URL=https://tu-servidor/api/samples
-# NILOCARDMED_SER__DEVICE_ID=pi-sala-1   ← opcional; también vía cardmed_configure
+# NILOCARDMED_SER__DEVICE_ID=...   ← install.sh lo genera; CardMed puede cambiarlo vía tablet
 
 # Muestreo (valores por defecto razonables; el operador puede cambiarlos por BLE)
 NILOCARDMED_SAMPLING__INTERVAL_SECONDS=60

@@ -21,14 +21,6 @@ fi
 export INSTALL_DIR="${INSTALL_DIR:-${REPO_ROOT}}"
 export DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-${INSTALL_DIR}/deploy.env}"
 
-load_deploy_env
-
-# En instalación de producción, usar NILOCARDMED_INSTALL_DIR si no se pasó INSTALL_DIR.
-if [[ "${INSTALL_DIR}" == "${REPO_ROOT}" && -n "${NILOCARDMED_INSTALL_DIR:-}" ]]; then
-  INSTALL_DIR="${NILOCARDMED_INSTALL_DIR}"
-  export INSTALL_DIR
-fi
-
 log_info "Instalando NiloCardmed en ${INSTALL_DIR}"
 
 require_command docker
@@ -38,15 +30,16 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -f "${DEPLOY_ENV_FILE}" ]]; then
-  if [[ -f "${REPO_ROOT}/deploy.env.example" ]]; then
-    log_info "Creando ${DEPLOY_ENV_FILE} desde deploy.env.example"
-    cp "${REPO_ROOT}/deploy.env.example" "${DEPLOY_ENV_FILE}"
-  else
-    log_error "No se encontró deploy.env ni deploy.env.example"
-    exit 1
-  fi
-  load_deploy_env
+# En instalación de producción, usar NILOCARDMED_INSTALL_DIR si existe en deploy.env.example
+if [[ -f "${REPO_ROOT}/deploy.env.example" ]]; then
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/deploy.env.example" 2>/dev/null || true
+fi
+if [[ "${INSTALL_DIR}" == "${REPO_ROOT}" && -n "${NILOCARDMED_INSTALL_DIR:-}" ]]; then
+  INSTALL_DIR="${NILOCARDMED_INSTALL_DIR}"
+  export INSTALL_DIR
+  DEPLOY_ENV_FILE="${INSTALL_DIR}/deploy.env"
+  export DEPLOY_ENV_FILE
 fi
 
 if [[ "${INSTALL_DIR}" != "${REPO_ROOT}" ]]; then
@@ -60,11 +53,12 @@ if [[ "${INSTALL_DIR}" != "${REPO_ROOT}" ]]; then
     "${REPO_ROOT}/" "${INSTALL_DIR}/"
 fi
 
-if [[ ! -f "${INSTALL_DIR}/.env" && -f "${INSTALL_DIR}/.env.example" ]]; then
-  log_info "Creando ${INSTALL_DIR}/.env desde .env.example"
-  cp "${INSTALL_DIR}/.env.example" "${INSTALL_DIR}/.env"
-fi
+# deploy.env + .env desde plantillas; UUID BLE persistente; contraseña interactiva
+# shellcheck source=lib/setup-env.sh
+source "${INSTALL_DIR}/scripts/lib/setup-env.sh"
+setup_deploy_and_app_env "${INSTALL_DIR}"
 
+load_deploy_env
 ensure_host_directories
 
 INSTALL_DIR="${INSTALL_DIR}" DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE}" \
@@ -100,5 +94,8 @@ log_info "Estado del servicio:"
 systemctl --no-pager status "${NILOCARDMED_SERVICE_NAME}.service" || true
 
 log_info "Instalación completada."
+log_info "Device ID (SER): $(read_env_value "${INSTALL_DIR}/.env" NILOCARDMED_SER__DEVICE_ID || echo '?')"
+log_info "Nombre BLE: $(read_env_value "${INSTALL_DIR}/.env" NILOCARDMED_BLUETOOTH__DEVICE_NAME || echo '?')"
+log_info "Identidad: ${HOST_DATA_DIR:-/var/lib/nilocardmed/data}/device-identity.env"
 log_info "Logs: journalctl -u ${NILOCARDMED_SERVICE_NAME} -f"
 log_info "Docker: cd ${INSTALL_DIR} && ${DOCKER_COMPOSE_CMD} ps"
