@@ -204,6 +204,8 @@ class BluezBluetoothBackend(BluetoothBackend):
         """Publica GATT + LE advertisement esperando confirmación de BlueZ."""
         import dbus
 
+        from nilocardmed.bluetooth.advertising_status import purge_stale_bluez_registrations
+
         for service in ble.services:
             ble.app.add_managed_object(service)
         for characteristic in ble.characteristics:
