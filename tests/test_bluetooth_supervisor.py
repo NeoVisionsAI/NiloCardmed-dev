@@ -21,6 +21,7 @@ def test_supervisor_restarts_unhealthy_bluetooth():
 
     bluetooth_service = MagicMock()
     bluetooth_service.is_healthy.side_effect = [False, True]
+    bluetooth_service.has_active_client.return_value = False
 
     shutdown = threading.Event()
     supervisor = BluetoothSupervisor(config_manager, bluetooth_service)
@@ -55,6 +56,29 @@ def test_supervisor_skips_when_disabled():
 
     bluetooth_service = MagicMock()
     bluetooth_service.is_healthy.return_value = False
+
+    shutdown = threading.Event()
+
+    def stop_after_one(timeout: float) -> bool:
+        shutdown.set()
+        return True
+
+    shutdown.wait = stop_after_one  # type: ignore[method-assign]
+
+    supervisor = BluetoothSupervisor(config_manager, bluetooth_service)
+    supervisor.run(shutdown)
+
+    bluetooth_service.restart.assert_not_called()
+
+
+def test_supervisor_skips_restart_with_active_client():
+    config = AppConfig(resilience=ResilienceSettings(bluetooth_restart_cooldown_seconds=10))
+    config_manager = MagicMock()
+    config_manager.get.return_value = config
+
+    bluetooth_service = MagicMock()
+    bluetooth_service.is_healthy.return_value = False
+    bluetooth_service.has_active_client.return_value = True
 
     shutdown = threading.Event()
 

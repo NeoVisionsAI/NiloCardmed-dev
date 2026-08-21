@@ -86,46 +86,102 @@ class BluezBluetoothBackend(BluetoothBackend):
         self._peripheral = None
         self._gatt_registered = threading.Event()
         self._master_shutdown: threading.Event | None = None
+        self._started_at: float | None = None
+        self._lifecycle_lock = threading.Lock()
 
     def start(self, shutdown: threading.Event) -> None:
-        if self._thread and self._thread.is_alive():
-            return
+        with self._lifecycle_lock:
+            if self._thread and self._thread.is_alive():
+                return
 
-        self._local_stop.clear()
-        self._gatt_registered.clear()
-        self._master_shutdown = shutdown
+            self._local_stop.clear()
+            self._gatt_registered.clear()
+            self._started_at = time.monotonic()
+            self._master_shutdown = shutdown
 
-        def _runner() -> None:
-            try:
-                self._run_peripheral(shutdown)
-            except Exception:
-                logger.exception("Error en backend BlueZ (se reintentará vía supervisor)")
-            finally:
-                self._gatt_registered.clear()
-                self._publish_thread = None
-                self._tx_characteristic = None
+            def _runner() -> None:
+                try:
+                    self._run_peripheral(shutdown)
+                except Exception:
+                    logger.exception("Error en backend BlueZ (se reintentará vía supervisor)")
+                finally:
+                    self._gatt_registered.clear()
+                    self._publish_thread = None
+                    self._tx_characteristic = None
+                    peripheral_ref = self._peripheral
+                    self._peripheral = None
+                    self._shutdown_peripheral(peripheral_ref)
+                    self._started_at = None
 
-        self._thread = threading.Thread(target=_runner, name="bluetooth-bluez", daemon=True)
-        self._thread.start()
+            self._thread = threading.Thread(target=_runner, name="bluetooth-bluez", daemon=True)
+            self._thread.start()
 
     def stop(self) -> None:
-        self._local_stop.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=10)
-        self._thread = None
-        self._publish_thread = None
-        self._tx_characteristic = None
-        self._gatt_registered.clear()
-        self._local_stop.clear()
+        with self._lifecycle_lock:
+            self._local_stop.set()
+            self._shutdown_peripheral(self._peripheral)
+            if self._publish_thread and self._publish_thread.is_alive():
+                self._publish_thread.join(timeout=15)
+            if self._thread and self._thread.is_alive():
+                self._thread.join(timeout=15)
+            self._thread = None
+            self._publish_thread = None
+            self._tx_characteristic = None
+            self._peripheral = None
+            self._gatt_registered.clear()
+            self._started_at = None
+            self._local_stop.clear()
+
+    def has_active_client(self) -> bool:
+        return self._tx_characteristic is not None
 
     def is_healthy(self) -> bool:
         if self._thread is None or not self._thread.is_alive():
             return False
-        if not self._gatt_registered.is_set():
-            return False
         if self._publish_thread is not None and not self._publish_thread.is_alive():
             return False
+        if self.has_active_client():
+            return True
+        if not self._gatt_registered.is_set():
+            if self._started_at is not None and time.monotonic() - self._started_at < 45.0:
+                return True
+            return False
         return True
+
+    @staticmethod
+    def _shutdown_peripheral(ble) -> None:
+        """Desregistra GATT/advertisement y libera rutas D-Bus de bluezero."""
+        if ble is None:
+            return
+
+        try:
+            ble.mainloop.quit()
+        except Exception as exc:
+            logger.debug("mainloop.quit: %s", exc)
+
+        try:
+            ble.ad_manager.unregister_advertisement(ble.advert)
+        except Exception as exc:
+            logger.debug("unregister_advertisement: %s", exc)
+
+        try:
+            ble.srv_mng.unregister_application(ble.app)
+        except Exception as exc:
+            logger.debug("unregister_application: %s", exc)
+
+        managed = list(getattr(ble.app, "managed_objs", []))
+        for obj in reversed(managed):
+            try:
+                obj.remove_from_connection()
+            except Exception as exc:
+                logger.debug("remove managed obj: %s", exc)
+
+        try:
+            ble.app.remove_from_connection()
+        except Exception as exc:
+            logger.debug("remove application: %s", exc)
+
+        time.sleep(0.5)
 
     def _run_peripheral(self, shutdown: threading.Event) -> None:
         try:
@@ -157,14 +213,6 @@ class BluezBluetoothBackend(BluetoothBackend):
             adapter_address,
             self.settings.service_uuid,
             self.settings.ble_framing_enabled,
-        )
-        from nilocardmed.operations_log import trace_system
-
-        trace_system(
-            event="bluetooth_activo",
-            detail="GATT publicado",
-            device_name=self.settings.device_name,
-            adapter=adapter_address,
         )
 
         ble = peripheral.Peripheral(
@@ -210,6 +258,14 @@ class BluezBluetoothBackend(BluetoothBackend):
                 stable_since = time.monotonic()
             elif time.monotonic() - stable_since >= 2.0:
                 self._gatt_registered.set()
+                from nilocardmed.operations_log import trace_system
+
+                trace_system(
+                    event="bluetooth_activo",
+                    detail="GATT publicado",
+                    device_name=self.settings.device_name,
+                    adapter=adapter_address,
+                )
                 logger.info("GATT BLE registrado y publicando")
                 break
             time.sleep(0.5)

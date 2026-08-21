@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 from nilocardmed.bluetooth.backends import BluetoothBackend, select_backend
 from nilocardmed.bluetooth.exceptions import BluetoothConfigError
@@ -31,6 +32,7 @@ class BluetoothService:
         self._thread: threading.Thread | None = None
         self._shutdown = threading.Event()
         self._master_shutdown: threading.Event | None = None
+        self._restart_lock = threading.Lock()
 
     @property
     def router(self) -> CommandRouter:
@@ -71,10 +73,20 @@ class BluetoothService:
     def restart(self, shutdown: threading.Event | None = None) -> None:
         """Reinicia el backend BLE sin apagar el resto del daemon."""
         master = shutdown or self._master_shutdown or self._shutdown
-        logger.info("Reiniciando servicio Bluetooth")
-        self._stop_backend()
-        self._backend = None
-        self.start(master)
+        with self._restart_lock:
+            logger.info("Reiniciando servicio Bluetooth")
+            self._stop_backend()
+            time.sleep(2.0)
+            self._backend = None
+            self.start(master)
+
+    def has_active_client(self) -> bool:
+        if self._backend is None:
+            return False
+        checker = getattr(self._backend, "has_active_client", None)
+        if callable(checker):
+            return bool(checker())
+        return False
 
     def is_healthy(self) -> bool:
         if not self.settings.enabled:
