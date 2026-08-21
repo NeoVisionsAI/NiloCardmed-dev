@@ -120,6 +120,24 @@ prompt_bluetooth_password() {
   export BLUETOOTH_PASSWORD="${password}"
 }
 
+sync_deploy_run_user() {
+  local deploy_file="$1"
+  local current_user current_group
+
+  resolve_run_user "${SUDO_USER:-root}"
+  current_user="$(read_env_value "${deploy_file}" "NILOCARDMED_RUN_USER" || true)"
+  current_group="$(read_env_value "${deploy_file}" "NILOCARDMED_RUN_GROUP" || true)"
+
+  if [[ "${current_user}" != "${NILOCARDMED_RUN_USER}" ]]; then
+    update_env_file "${deploy_file}" "NILOCARDMED_RUN_USER" "${NILOCARDMED_RUN_USER}"
+    log_info "deploy.env: NILOCARDMED_RUN_USER=${NILOCARDMED_RUN_USER}"
+  fi
+  if [[ "${current_group}" != "${NILOCARDMED_RUN_GROUP}" ]]; then
+    update_env_file "${deploy_file}" "NILOCARDMED_RUN_GROUP" "${NILOCARDMED_RUN_GROUP}"
+    log_info "deploy.env: NILOCARDMED_RUN_GROUP=${NILOCARDMED_RUN_GROUP}"
+  fi
+}
+
 setup_deploy_and_app_env() {
   local install_dir="$1"
   local deploy_example="${install_dir}/deploy.env.example"
@@ -145,6 +163,7 @@ setup_deploy_and_app_env() {
 
   # shellcheck disable=SC1090
   set -a && source "${deploy_file}" && set +a
+  sync_deploy_run_user "${deploy_file}"
   local data_dir="${HOST_DATA_DIR:-/var/lib/nilocardmed/data}"
 
   if [[ ! -f "${env_file}" ]]; then

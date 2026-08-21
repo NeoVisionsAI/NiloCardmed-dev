@@ -53,6 +53,31 @@ load_deploy_env() {
   SYSTEMD_AFTER="${SYSTEMD_AFTER:-docker.service network-online.target}"
   SYSTEMD_REQUIRES="${SYSTEMD_REQUIRES:-docker.service}"
   SYSTEMD_WANTS="${SYSTEMD_WANTS:-network-online.target}"
+  resolve_run_user "${SUDO_USER:-root}"
+}
+
+# Ajusta NILOCARDMED_RUN_USER/GROUP si el valor de deploy.env no existe en el sistema.
+resolve_run_user() {
+  local fallback="${1:-${SUDO_USER:-root}}"
+  local user="${NILOCARDMED_RUN_USER:-${fallback}}"
+  local group="${NILOCARDMED_RUN_GROUP:-${user}}"
+
+  if ! id "${user}" >/dev/null 2>&1; then
+    if id "${fallback}" >/dev/null 2>&1; then
+      log_info "Usuario '${user}' no existe; usando '${fallback}'"
+      user="${fallback}"
+    else
+      log_info "Usuario '${user}' no existe; usando 'root'"
+      user="root"
+    fi
+  fi
+
+  if ! getent group "${group}" >/dev/null 2>&1; then
+    group="${user}"
+  fi
+
+  export NILOCARDMED_RUN_USER="${user}"
+  export NILOCARDMED_RUN_GROUP="${group}"
 }
 
 render_template() {
@@ -84,5 +109,6 @@ ensure_host_directories() {
 
   log_info "Creando directorios en host: ${data_dir}, ${logs_dir}"
   mkdir -p "${data_dir}" "${logs_dir}"
+  resolve_run_user "${SUDO_USER:-root}"
   chown -R "${NILOCARDMED_RUN_USER}:${NILOCARDMED_RUN_GROUP}" "${data_dir}" "${logs_dir}"
 }
