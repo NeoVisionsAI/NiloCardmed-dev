@@ -9,7 +9,6 @@ services:
       - SYS_TIME
     group_add:
       - ${CONTAINER_GROUP_ADD:-video}
-      - bluetooth
     # Pi Zero W2: limitar RAM para evitar OOM en el host (~512 MiB total)
     deploy:
       resources:

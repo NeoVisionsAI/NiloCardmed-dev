@@ -62,12 +62,23 @@ if is_true "${ENABLE_BLUETOOTH:-false}"; then
   volumes+=("${dbus_path}:/var/run/dbus/system_bus_socket:ro")
 fi
 
-if is_true "${ENABLE_WIFI:-false}"; then
-  wifi_script_host="${WIFI_HOST_SCRIPT_HOST:-${INSTALL_DIR}/scripts/wifi-host.sh}"
-  wifi_script_container="${WIFI_HOST_SCRIPT_CONTAINER:-/host/scripts/wifi-host.sh}"
-  volumes+=("${wifi_script_host}:${wifi_script_container}:ro")
-  dbus_path="${WIFI_DBUS_SYSTEM_PATH:-/var/run/dbus/system_bus_socket}"
-  volumes+=("${dbus_path}:/var/run/dbus/system_bus_socket:ro")
+  if is_true "${ENABLE_WIFI:-false}"; then
+    wifi_script_host="${WIFI_HOST_SCRIPT_HOST:-${INSTALL_DIR}/scripts/wifi-host.sh}"
+    wifi_script_container="${WIFI_HOST_SCRIPT_CONTAINER:-/host/scripts/wifi-host.sh}"
+    volumes+=("${wifi_script_host}:${wifi_script_container}:ro")
+    dbus_path="${WIFI_DBUS_SYSTEM_PATH:-/var/run/dbus/system_bus_socket}"
+    volumes+=("${dbus_path}:/var/run/dbus/system_bus_socket:ro")
+  fi
+
+extra_group_gids=()
+if is_true "${ENABLE_BLUETOOTH:-false}"; then
+  bt_gid=""
+  if bt_gid="$(resolve_host_group_gid bluetooth)"; then
+    extra_group_gids+=("${bt_gid}")
+    log_info "Contenedor: grupo bluetooth → GID ${bt_gid}"
+  else
+    log_warn "Grupo bluetooth no disponible; BLE usará solo D-Bus (sin group_add)"
+  fi
 fi
 
 {
@@ -98,6 +109,13 @@ fi
 
   if is_true "${PRIVILEGED_MODE:-false}"; then
     echo "    privileged: true"
+  fi
+
+  if ((${#extra_group_gids[@]} > 0)); then
+    echo "    group_add:"
+    for gid in "${extra_group_gids[@]}"; do
+      echo "      - \"${gid}\""
+    done
   fi
 
   if is_true "${ENABLE_WIFI:-false}" || is_true "${ENABLE_BLUETOOTH:-false}"; then

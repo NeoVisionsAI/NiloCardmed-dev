@@ -105,6 +105,48 @@ ensure_install_dir_permissions() {
   chmod 644 "${install_dir}"/docker-compose*.yml 2>/dev/null || true
 }
 
+ensure_group_exists() {
+  local group="$1"
+
+  if getent group "${group}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ "${EUID}" -ne 0 ]]; then
+    log_warn "Grupo '${group}' no existe en el host (necesitas sudo install.sh)"
+    return 1
+  fi
+
+  case "${group}" in
+    docker | bluetooth | dialout | plugdev | video)
+      log_info "Creando grupo del sistema: ${group}"
+      if ! groupadd -r "${group}" 2>/dev/null && ! groupadd "${group}" 2>/dev/null; then
+        log_warn "No se pudo crear el grupo ${group}"
+        return 1
+      fi
+      ;;
+    *)
+      log_warn "Grupo desconocido omitido: ${group}"
+      return 1
+      ;;
+  esac
+}
+
+resolve_host_group_gid() {
+  local group="$1"
+  local gid=""
+
+  ensure_group_exists "${group}" || true
+  if ! getent group "${group}" >/dev/null 2>&1; then
+    return 1
+  fi
+  gid="$(getent group "${group}" | cut -d: -f3)"
+  if [[ -z "${gid}" ]]; then
+    return 1
+  fi
+  printf '%s\n' "${gid}"
+}
+
 load_deploy_env() {
   local repo_root
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

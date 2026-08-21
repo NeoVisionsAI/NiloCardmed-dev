@@ -80,25 +80,6 @@ ensure_docker_installed() {
   log_info "Compose: $(docker compose version 2>/dev/null | head -1)"
 }
 
-ensure_group_exists() {
-  local group="$1"
-  if getent group "${group}" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  case "${group}" in
-    docker | bluetooth | dialout | plugdev | video)
-      log_info "Creando grupo del sistema: ${group}"
-      if ! groupadd -r "${group}" 2>/dev/null && ! groupadd "${group}" 2>/dev/null; then
-        log_warn "No se pudo crear el grupo ${group} (puede crearse al instalar paquetes)"
-      fi
-      ;;
-    *)
-      log_warn "Grupo desconocido omitido: ${group}"
-      ;;
-  esac
-}
-
 ensure_bluezero_dbus_policy() {
   local policy_src=""
   local candidate
@@ -264,6 +245,7 @@ install_host_dependencies() {
 
   if is_true "${SKIP_HOST_DEPS:-false}"; then
     log_info "SKIP_HOST_DEPS=true — omitiendo instalación de paquetes del host"
+    ensure_run_user_groups "${run_user}"
     verify_host_ready
     return 0
   fi
