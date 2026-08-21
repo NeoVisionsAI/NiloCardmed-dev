@@ -15,16 +15,32 @@ def _parse_int_list(value: Any) -> list[int]:
     if isinstance(value, list):
         return [int(item) for item in value]
     if isinstance(value, str):
-        return [int(item.strip()) for item in value.split(",") if item.strip()]
-    raise TypeError("Se esperaba lista de enteros o string separado por comas")
+        text = value.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            parsed = json.loads(text)
+            if not isinstance(parsed, list):
+                raise ValueError("Se esperaba un array JSON de enteros")
+            return [int(item) for item in parsed]
+        return [int(item.strip()) for item in text.split(",") if item.strip()]
+    raise TypeError("Se esperaba lista de enteros, CSV o array JSON")
 
 
 def _parse_str_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
     if isinstance(value, str):
-        return [item.strip() for item in value.split(",") if item.strip()]
-    raise TypeError("Se esperaba lista de strings o string separado por comas")
+        text = value.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            parsed = json.loads(text)
+            if not isinstance(parsed, list):
+                raise ValueError("Se esperaba un array JSON de strings")
+            return [str(item) for item in parsed]
+        return [item.strip().strip('"').strip("'") for item in text.split(",") if item.strip()]
+    raise TypeError("Se esperaba lista de strings, CSV o array JSON")
 
 
 def _parse_json_dict(value: Any) -> dict[str, Any]:

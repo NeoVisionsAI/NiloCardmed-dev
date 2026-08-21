@@ -208,44 +208,62 @@ migrate_deploy_service_name_var() {
   fi
 }
 
-# Imágenes sin NoDecode (pydantic) requieren listas en JSON en .env
+# Imagen actual acepta CSV (200,201) y JSON ([200,201]); normalizar a CSV legible.
 normalize_env_list_values() {
   local env_file="$1"
-  local val json_val item
+  python3 - "$env_file" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
 
-  val="$(read_env_value "${env_file}" "NILOCARDMED_SER__SUCCESS_STATUS_CODES" || true)"
-  if [[ -n "${val}" && "${val}" != \[* ]]; then
-    json_val="[$(echo "${val}" | sed 's/ //g')]"
-    update_env_file "${env_file}" "NILOCARDMED_SER__SUCCESS_STATUS_CODES" "${json_val}"
-    log_info ".env: SUCCESS_STATUS_CODES → formato JSON"
-  fi
+path = Path(sys.argv[1])
+if not path.exists():
+    sys.exit(0)
 
-  val="$(read_env_value "${env_file}" "NILOCARDMED_SER__RETRY_ON_STATUS_CODES" || true)"
-  if [[ -n "${val}" && "${val}" != \[* ]]; then
-    json_val="[$(echo "${val}" | sed 's/ //g')]"
-    update_env_file "${env_file}" "NILOCARDMED_SER__RETRY_ON_STATUS_CODES" "${json_val}"
-    log_info ".env: RETRY_ON_STATUS_CODES → formato JSON"
-  fi
+keys = {
+    "NILOCARDMED_SER__SUCCESS_STATUS_CODES": "int",
+    "NILOCARDMED_SER__RETRY_ON_STATUS_CODES": "int",
+    "NILOCARDMED_BLUETOOTH__ALLOWED_COMMANDS_WITHOUT_AUTH": "str",
+}
 
-  val="$(read_env_value "${env_file}" "NILOCARDMED_BLUETOOTH__ALLOWED_COMMANDS_WITHOUT_AUTH" || true)"
-  if [[ -n "${val}" && "${val}" != \[* ]]; then
-    json_val="["
-    local first=true
-    IFS=',' read -ra parts <<< "${val}"
-    for item in "${parts[@]}"; do
-      item="${item// /}"
-      [[ -z "${item}" ]] && continue
-      if [[ "${first}" == true ]]; then
-        json_val+="\"${item}\""
-        first=false
-      else
-        json_val+=",\"${item}\""
-      fi
-    done
-    json_val+="]"
-    update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__ALLOWED_COMMANDS_WITHOUT_AUTH" "${json_val}"
-    log_info ".env: ALLOWED_COMMANDS_WITHOUT_AUTH → formato JSON"
-  fi
+lines = path.read_text(encoding="utf-8").splitlines()
+out: list[str] = []
+changed = False
+
+for line in lines:
+    matched = False
+    for key, kind in keys.items():
+        prefix = f"{key}="
+        if not line.startswith(prefix):
+            continue
+        matched = True
+        raw = line[len(prefix) :].strip().strip('"')
+        if not raw.startswith("["):
+            out.append(line)
+            break
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            out.append(line)
+            break
+        if not isinstance(parsed, list):
+            out.append(line)
+            break
+        if kind == "int":
+            normalized = ",".join(str(int(x)) for x in parsed)
+        else:
+            normalized = ",".join(str(x) for x in parsed)
+        out.append(f"{key}={normalized}")
+        changed = True
+        break
+    if not matched:
+        out.append(line)
+
+if changed:
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    print("[nilocardmed] .env: listas normalizadas a formato CSV")
+PY
 }
 
 sync_compose_file_env() {
