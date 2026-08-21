@@ -110,6 +110,14 @@ class BluezBluetoothBackend(BluetoothBackend):
             os.environ["DBUS_SYSTEM_BUS_ADDRESS"] = self.settings.dbus_system_bus_address
 
         adapter_address = self._resolve_adapter_address(bz_adapter)
+        adapter = bz_adapter.Adapter(adapter_address)
+        if adapter.alias != self.settings.device_name:
+            adapter.alias = self.settings.device_name
+            logger.info(
+                "Alias BlueZ del adaptador → %s (antes: hostname del sistema)",
+                self.settings.device_name,
+            )
+
         logger.info(
             "Publicando GATT BLE name=%s adapter=%s service=%s framing=%s",
             self.settings.device_name,

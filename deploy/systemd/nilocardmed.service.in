@@ -17,7 +17,7 @@ Environment=COMPOSE_PROJECT_NAME=@COMPOSE_PROJECT_NAME@
 Environment=COMPOSE_FILE=@COMPOSE_FILE@
 EnvironmentFile=-@INSTALL_DIR@/deploy.env
 EnvironmentFile=-@INSTALL_DIR@/.env
-ExecStartPre=+@INSTALL_DIR@/scripts/ensure-bluetooth-powered.sh
+ExecStartPre=+env INSTALL_DIR=@INSTALL_DIR@ ENV_FILE=@INSTALL_DIR@/.env @INSTALL_DIR@/scripts/ensure-bluetooth-powered.sh
 ExecStart=@DOCKER_COMPOSE_CMD@ up -d --remove-orphans
 ExecStop=@DOCKER_COMPOSE_CMD@ down
 ExecReload=@DOCKER_COMPOSE_CMD@ up -d --remove-orphans
