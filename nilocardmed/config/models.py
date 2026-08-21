@@ -385,6 +385,10 @@ class ResilienceSettings(BaseModel):
         default=True,
         description="WiFi sin SSID o desconectado en provisioning = degraded, no unhealthy",
     )
+    health_treat_missing_camera_as_degraded: bool = Field(
+        default=True,
+        description="Sin cámara USB (desconectada) = degraded, no unhealthy",
+    )
 
 
 class StorageSettings(BaseModel):

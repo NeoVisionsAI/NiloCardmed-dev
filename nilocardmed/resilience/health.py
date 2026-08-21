@@ -130,6 +130,12 @@ class HealthService:
 
     def _check_camera(self) -> ComponentHealth:
         camera = self._config.camera
+        resilience = self._config.resilience
+        missing_severity: HealthStatus = (
+            "degraded"
+            if resilience.health_treat_missing_camera_as_degraded
+            else "unhealthy"
+        )
         try:
             devices = list_cameras(
                 device_glob=camera.device_glob,
@@ -138,11 +144,16 @@ class HealthService:
                 include_non_capture=False,
             )
         except CameraError as exc:
-            return ComponentHealth("camera", False, str(exc), severity="unhealthy")
+            return ComponentHealth("camera", False, str(exc), severity=missing_severity)
 
         capture_devices = [device for device in devices if device.supports_capture]
         if not capture_devices:
-            return ComponentHealth("camera", False, "No hay cámaras USB con captura", severity="unhealthy")
+            return ComponentHealth(
+                "camera",
+                False,
+                "No hay cámara USB conectada",
+                severity=missing_severity,
+            )
 
         return ComponentHealth(
             "camera",

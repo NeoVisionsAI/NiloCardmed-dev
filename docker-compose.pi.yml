@@ -1,14 +1,12 @@
 # Extensiones de hardware para Raspberry Pi Zero W2.
 # Combinar con: COMPOSE_FILE=docker-compose.yml:docker-compose.pi.yml
-# Los montajes opcionales (USB bus, D-Bus) se generan en docker-compose.override.yml
-# mediante scripts/install.sh según deploy.env.
+# Cámara USB, bus USB y D-Bus se configuran en docker-compose.override.yml
+# (scripts/generate-compose-override.sh) según hardware detectado y deploy.env.
 
 services:
   nilocardmed:
     cap_add:
       - SYS_TIME
-    devices:
-      - ${VIDEO_DEVICE_HOST:-/dev/video0}:${VIDEO_DEVICE_CONTAINER:-/dev/video0}
     group_add:
       - ${CONTAINER_GROUP_ADD:-video}
     # Pi Zero W2: limitar RAM para evitar OOM en el host (~512 MiB total)

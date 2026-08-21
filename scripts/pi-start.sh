@@ -163,7 +163,7 @@ run_checks() {
   if [[ -e "${VIDEO_DEVICE_HOST:-/dev/video0}" ]]; then
     check_ok "Cámara USB: ${VIDEO_DEVICE_HOST:-/dev/video0}"
   else
-    check_fail "No existe ${VIDEO_DEVICE_HOST:-/dev/video0} — conecta la cámara USB"
+    check_warn "No hay cámara USB ahora — normal si está desconectada (hot-plug; conecta cuando quieras)"
   fi
 
   if [[ -S /var/run/dbus/system_bus_socket ]]; then

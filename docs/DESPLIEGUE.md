@@ -26,7 +26,7 @@ La Pi Zero W2 ya trae **WiFi y Bluetooth integrados** — no hay que instalar ha
 | Qué necesitas | Detalle |
 |---------------|---------|
 | Hardware | Raspberry Pi Zero W2 (WiFi + BLE integrados) |
-| Cámara | USB UVC (`/dev/video0`) |
+| Cámara | USB UVC — puede conectarse/desconectarse; no bloquea el arranque |
 | Almacenamiento | microSD ≥ 32 GB (recomendado 128 GB) |
 | Red | Internet en la instalación (apt + descarga imagen Docker); WiFi operativo se configura después por tablet |
 | Tablet | Android con BLE + app web (ver [OPERATOR_GUIDE.md](OPERATOR_GUIDE.md)) |
@@ -85,6 +85,7 @@ NILOCARDMED_INSTALL_DIR=/opt/nilocardmed
 HOST_DATA_DIR=/var/lib/nilocardmed/data
 HOST_LOG_DIR=/var/lib/nilocardmed/logs
 DOCKER_DEFAULT_PLATFORM=linux/arm/v7
+ENABLE_CAMERA_HOTPLUG=true
 VIDEO_DEVICE_HOST=/dev/video0
 MOUNT_USB_BUS=true
 ENABLE_WIFI=true
