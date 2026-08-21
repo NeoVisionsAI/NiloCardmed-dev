@@ -257,4 +257,7 @@ setup_deploy_and_app_env() {
   log_info "  device_id (SER)=${DEVICE_UUID}"
   log_info "  BLE device_name=${BLE_DEVICE_NAME}"
   log_info "  BLE password=(configurada en .env)"
+  if [[ "${EUID}" -eq 0 ]]; then
+    ensure_install_dir_permissions "${install_dir}"
+  fi
 }

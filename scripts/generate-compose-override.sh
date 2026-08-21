@@ -111,6 +111,7 @@ if [[ "$(wc -l < "${tmp_file}")" -le 3 ]]; then
   # shellcheck source=lib/setup-env.sh
   source "${SCRIPT_DIR}/lib/setup-env.sh"
   sync_compose_file_env "${INSTALL_DIR}"
+  ensure_install_dir_permissions "${INSTALL_DIR}"
   exit 0
 fi
 
@@ -119,3 +120,4 @@ log_info "Override generado correctamente"
 # shellcheck source=lib/setup-env.sh
 source "${SCRIPT_DIR}/lib/setup-env.sh"
 sync_compose_file_env "${INSTALL_DIR}"
+ensure_install_dir_permissions "${INSTALL_DIR}"

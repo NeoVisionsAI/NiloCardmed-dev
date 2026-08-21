@@ -72,12 +72,37 @@ sync_project_to_install_dir() {
     --exclude '.env' \
     "${src}/" "${dst}/"
   ensure_scripts_executable "${dst}"
+  if [[ "${EUID}" -eq 0 ]]; then
+    ensure_install_dir_permissions "${dst}"
+  fi
 }
 
 ensure_scripts_executable() {
   local install_dir="$1"
   chmod +x "${install_dir}/scripts/"*.sh 2>/dev/null || true
   chmod +x "${install_dir}/scripts/lib/"*.sh 2>/dev/null || true
+}
+
+# systemd ejecuta docker compose como NILOCARDMED_RUN_USER; archivos creados por install (root)
+# deben ser legibles por ese usuario (override, deploy.env, compose…).
+ensure_install_dir_permissions() {
+  local install_dir="$1"
+  resolve_run_user "${SUDO_USER:-$(id -un)}"
+  local user="${NILOCARDMED_RUN_USER}"
+  local group="${NILOCARDMED_RUN_GROUP}"
+
+  if [[ "${EUID}" -ne 0 ]]; then
+    chmod 644 "${install_dir}/docker-compose.override.yml" 2>/dev/null || true
+    return 0
+  fi
+
+  log_info "Permisos: ${user}:${group} en ${install_dir}"
+  chown -R "${user}:${group}" "${install_dir}"
+  find "${install_dir}" -type d -exec chmod 755 {} +
+  find "${install_dir}" -type f -exec chmod 644 {} +
+  ensure_scripts_executable "${install_dir}"
+  chmod 640 "${install_dir}/deploy.env" "${install_dir}/.env" 2>/dev/null || true
+  chmod 644 "${install_dir}"/docker-compose*.yml 2>/dev/null || true
 }
 
 load_deploy_env() {

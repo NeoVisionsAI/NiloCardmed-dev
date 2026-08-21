@@ -105,6 +105,7 @@ ensure_host_directories
 INSTALL_DIR="${INSTALL_DIR}" DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE}" \
   bash "${INSTALL_DIR}/scripts/generate-compose-override.sh"
 load_deploy_env
+ensure_install_dir_permissions "${INSTALL_DIR}"
 
 # --- 7. Build imagen (opcional; capas cacheadas entre builds) ---
 if is_true "${SKIP_BUILD:-false}"; then
