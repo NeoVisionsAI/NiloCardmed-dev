@@ -48,8 +48,10 @@ Variables:
   SKIP_BUILD=true          Igual que --skip-build
 
 Iteración rápida en Pi:
-  sudo ./scripts/update.sh              # ~segundos (solo código + restart)
+  sudo ./scripts/update.sh              # ~segundos (código + Bluetooth host + restart)
   sudo ./scripts/update.sh --build      # rebuild con caché Docker (~1-3 min si solo cambió código)
+
+Incluye automáticamente scripts/ensure-bluetooth-powered.sh (BlueZ, discoverable, alias).
 EOF
       exit 0
       ;;
@@ -150,6 +152,8 @@ systemctl enable "${NILOCARDMED_SERVICE_NAME}.service"
 
 # Parar contenedor previo si existía (compose project correcto)
 run_compose_in_install_dir down --remove-orphans 2>/dev/null || true
+
+ensure_bluetooth_host_ready "${INSTALL_DIR}"
 
 systemctl restart "${NILOCARDMED_SERVICE_NAME}.service"
 

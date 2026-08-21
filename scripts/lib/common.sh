@@ -276,3 +276,28 @@ run_compose_in_install_dir() {
     compose_cmd "$@"
   )
 }
+
+# BlueZ en el host: Experimental, discoverable, alias BLE (requiere root).
+ensure_bluetooth_host_ready() {
+  local install_dir="${1:-${INSTALL_DIR:-}}"
+
+  if [[ -z "${install_dir}" ]]; then
+    log_warn "ensure_bluetooth_host_ready: INSTALL_DIR no definido"
+    return 0
+  fi
+
+  if ! is_true "${ENABLE_BLUETOOTH:-false}"; then
+    log_info "ENABLE_BLUETOOTH=false — omitiendo ensure-bluetooth-powered"
+    return 0
+  fi
+
+  local script="${install_dir}/scripts/ensure-bluetooth-powered.sh"
+  if [[ ! -f "${script}" ]]; then
+    log_warn "No encontrado: ${script}"
+    return 0
+  fi
+
+  log_info "=== Bluetooth host (BlueZ Experimental, discoverable, alias) ==="
+  INSTALL_DIR="${install_dir}" ENV_FILE="${install_dir}/.env" \
+    bash "${script}" || log_warn "ensure-bluetooth-powered falló — revisa: bluetoothctl show"
+}

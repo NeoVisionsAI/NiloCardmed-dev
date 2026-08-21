@@ -21,12 +21,10 @@ for arg in "$@"; do
       cat <<'EOF'
 Uso: sudo ./scripts/update.sh [--build]
 
-  (sin flags)   rsync a /opt/nilocardmed, override compose, reinicia servicio
+  (sin flags)   rsync a /opt/nilocardmed, override compose, Bluetooth host, reinicia servicio
   --build       además reconstruye imagen Docker (usa caché; capas pip cacheadas)
 
-Equivalente manual:
-  sudo ./scripts/install.sh --skip-host-deps --skip-build
-  sudo ./scripts/install.sh --skip-host-deps   # con build
+Incluye scripts/ensure-bluetooth-powered.sh (BlueZ Experimental, discoverable, alias).
 EOF
       exit 0
       ;;
