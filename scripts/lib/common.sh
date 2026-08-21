@@ -57,6 +57,7 @@ sync_project_to_install_dir() {
 
   if [[ "$(realpath -m "${src}")" == "$(realpath -m "${dst}")" ]]; then
     log_info "Instalación in-place en ${dst}"
+    ensure_scripts_executable "${dst}"
     return 0
   fi
 
@@ -70,6 +71,13 @@ sync_project_to_install_dir() {
     --exclude 'deploy.env' \
     --exclude '.env' \
     "${src}/" "${dst}/"
+  ensure_scripts_executable "${dst}"
+}
+
+ensure_scripts_executable() {
+  local install_dir="$1"
+  chmod +x "${install_dir}/scripts/"*.sh 2>/dev/null || true
+  chmod +x "${install_dir}/scripts/lib/"*.sh 2>/dev/null || true
 }
 
 load_deploy_env() {

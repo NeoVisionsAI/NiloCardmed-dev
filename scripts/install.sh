@@ -143,6 +143,6 @@ log_info "Identidad:   ${HOST_DATA_DIR:-/var/lib/nilocardmed/data}/device-identi
 log_info ""
 log_info "Comandos útiles:"
 log_info "  sudo systemctl status ${NILOCARDMED_SERVICE_NAME}"
-log_info "  sudo ${INSTALL_DIR}/scripts/pi-start.sh status"
-log_info "  sudo ${INSTALL_DIR}/scripts/pi-start.sh trace"
+log_info "  sudo bash ${INSTALL_DIR}/scripts/pi-start.sh status"
+log_info "  sudo bash ${INSTALL_DIR}/scripts/pi-start.sh trace"
 log_info "  journalctl -u ${NILOCARDMED_SERVICE_NAME} -f"
