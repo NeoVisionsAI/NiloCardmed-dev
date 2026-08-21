@@ -30,6 +30,7 @@ from nilocardmed.system.handlers import (
     handle_time_sync,
 )
 from nilocardmed.sampler.window import evaluate_window
+from nilocardmed.operations_log import trace_config
 from nilocardmed.wifi.exceptions import WifiError
 from nilocardmed.wifi.service import WifiService
 
@@ -48,13 +49,28 @@ def _save_config(ctx: CommandContext, config: AppConfig) -> None:
     ctx.config_manager.save(config)
 
 
+def _save_config_and_trace(ctx: CommandContext, config: AppConfig, change: str, **fields) -> None:
+    _save_config(ctx, config)
+    trace_config(change=change, **fields)
+
+
 def handle_auth(ctx: CommandContext, request: CommandRequest) -> dict[str, Any]:
     password = request.payload.get("password")
     expected = ctx.settings.password.get_secret_value()
     if password != expected:
+        from nilocardmed.operations_log import trace
+
+        trace("ble", "autenticación BLE fallida", data={"cmd": "auth"})
         raise BluetoothCommandError("invalid_password")
     token, expires_in = ctx.sessions.issue_token()
     ctx.privileged.elevate(token)
+    from nilocardmed.operations_log import trace
+
+    trace(
+        "ble",
+        "autenticación BLE OK",
+        data={"device_name": ctx.settings.device_name, "expires_in": expires_in},
+    )
     return {"token": token, "expires_in": expires_in, "device_name": ctx.settings.device_name}
 
 
@@ -171,7 +187,7 @@ def handle_sampling_set_interval(ctx: CommandContext, request: CommandRequest) -
 
     config = ctx.config_manager.get()
     config.sampling.interval_seconds = interval
-    _save_config(ctx, config)
+    _save_config_and_trace(ctx, config, "intervalo de muestreo", interval_seconds=interval)
     return {"interval_seconds": interval}
 
 
@@ -182,7 +198,13 @@ def handle_sampling_set_window(ctx: CommandContext, request: CommandRequest) -> 
     config = ctx.config_manager.get()
     config.sampling.monitor_start = monitor_start
     config.sampling.monitor_end = monitor_end
-    _save_config(ctx, config)
+    _save_config_and_trace(
+        ctx,
+        config,
+        "ventana de monitorización",
+        monitor_start=monitor_start,
+        monitor_end=monitor_end,
+    )
     window = evaluate_window(config.sampling)
     return {
         "monitor_start": monitor_start,
@@ -212,6 +234,12 @@ def handle_wifi_connect(ctx: CommandContext, request: CommandRequest) -> dict[st
         status = service.connect(ssid, password, persist=persist)
     except WifiError as exc:
         raise BluetoothCommandError("wifi_connection_failed", str(exc)) from exc
+    trace_config(
+        change="WiFi conectado por BLE",
+        ssid=status.ssid,
+        ip=status.ip_address,
+        persist=persist,
+    )
     return status.to_dict()
 
 

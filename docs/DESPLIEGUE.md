@@ -143,7 +143,55 @@ Guía detallada para el operador: [OPERATOR_GUIDE.md](OPERATOR_GUIDE.md) · Prot
 
 ---
 
-## 4. Instalar (un solo comando)
+## 4. Copiar el proyecto a la Pi (desde tu PC)
+
+Si desarrollas en otro equipo y la Pi solo tiene SSH:
+
+```bash
+# Sustituye PI_HOST (ej. 192.168.1.50 o raspberrypi.local)
+export PI_HOST=pi@192.168.1.50
+
+rsync -av --progress \
+  --exclude .git --exclude .venv --exclude data --exclude __pycache__ \
+  ./ "${PI_HOST}:/opt/nilocardmed/"
+
+ssh "${PI_HOST}" 'cd /opt/nilocardmed && chmod +x scripts/pi-start.sh'
+```
+
+En la Pi, edita antes de arrancar (solo una vez):
+
+```bash
+ssh "${PI_HOST}"
+cd /opt/nilocardmed
+nano .env          # contraseña BLE + URL SER
+# deploy.env ya trae ENABLE_WIFI/BLUETOOTH=true
+```
+
+---
+
+## 5. Arrancar con `scripts/pi-start.sh`
+
+Script único de comprobación y arranque:
+
+```bash
+cd /opt/nilocardmed   # o donde hayas clonado el repo
+chmod +x scripts/pi-start.sh
+
+./scripts/pi-start.sh check          # comprobar Docker, cámara, D-Bus, BLE…
+./scripts/pi-start.sh start          # build + docker compose up -d
+./scripts/pi-start.sh start --build  # forzar rebuild de imagen
+./scripts/pi-start.sh status         # estado + health JSON
+./scripts/pi-start.sh logs           # logs en tiempo real
+
+# Arranque automático al boot (opcional, producción):
+sudo ./scripts/pi-start.sh install
+```
+
+La **primera build en Pi Zero puede tardar 15–25 minutos**. Tras `start`, el dispositivo queda en BLE (`NiloCardmed`) listo para la tablet — **sin WiFi configurado es normal** (estado `degraded`).
+
+---
+
+## 6. Instalar con systemd (alternativa)
 
 Desde el directorio del proyecto:
 
@@ -166,7 +214,7 @@ sudo INSTALL_DIR=/opt/nilocardmed ./scripts/install.sh
 
 ---
 
-## 5. Verificación post-instalación
+## 7. Verificación post-instalación
 
 ### Servicio y contenedor
 
@@ -211,7 +259,7 @@ Guía operador: [OPERATOR_GUIDE.md](OPERATOR_GUIDE.md).
 
 ---
 
-## 6. Configuración posterior (sin reinstalar)
+## 8. Configuración posterior (sin reinstalar)
 
 | Cambio | Cómo aplicarlo |
 |--------|----------------|
@@ -223,7 +271,7 @@ La config se recarga sola cada ~30 s; reinicio solo necesario para cambios en `.
 
 ---
 
-## 7. Actualizar versión
+## 9. Actualizar versión
 
 ```bash
 cd /opt/nilocardmed-src   # o donde tengas el clone
@@ -235,7 +283,7 @@ Los datos (`/var/lib/nilocardmed/data`) y logs se conservan.
 
 ---
 
-## 8. Desinstalar
+## 10. Desinstalar
 
 ```bash
 sudo ./scripts/uninstall.sh
@@ -245,7 +293,7 @@ Los datos en `HOST_DATA_DIR` y logs en `HOST_LOG_DIR` **no se borran** salvo que
 
 ---
 
-## 9. Observabilidad y logs
+## 11. Observabilidad y logs
 
 Sí, hay un **sistema de logs** integrado. Puedes revisar qué ocurre en varios sitios según lo que busques.
 
@@ -268,6 +316,43 @@ NILOCARDMED_LOG_STRUCTURED=true     # true = JSON (recomendado)
 ```
 
 El fichero rotativo guarda hasta **3 copias** de **5 MB** cada una.
+
+### Ver la traza operativa por SSH
+
+Los eventos importantes se registran con el logger **`nilocardmed.trace`** y el prefijo **`[ble]`**, **`[wifi]`**, **`[config]`**, **`[system]`** en el mensaje. También quedan en `data/telemetry.jsonl`.
+
+```bash
+cd /opt/nilocardmed
+
+# Solo traza (BLE, WiFi, cambios de config) — recomendado mientras configuras la tablet
+./scripts/pi-start.sh trace
+
+# Todos los logs del contenedor
+./scripts/pi-start.sh logs
+# o directamente:
+docker compose logs -f --tail=200
+
+# Filtrar manualmente (logs JSON)
+docker compose logs -f 2>&1 | grep nilocardmed.trace
+
+# Historial persistido (eventos recientes)
+tail -f /var/lib/nilocardmed/data/telemetry.jsonl
+```
+
+**Ejemplos de mensajes que verás:**
+
+| Mensaje | Significado |
+|---------|-------------|
+| `[system] arranque` | Servicio iniciado |
+| `[system] bluetooth_activo` | GATT BLE publicado (`NiloCardmed`) |
+| `[ble] cliente BLE conectado` | Tablet suscrita a notificaciones |
+| `[ble] autenticación BLE OK` | Operador autenticado |
+| `[ble] comando BLE wifi_connect OK` | WiFi configurado |
+| `[config] WiFi conectado por BLE` | SSID guardado (ssid=…) |
+| `[config] intervalo de muestreo` | Cambio de intervalo |
+| `[wifi] Conectando a WiFi ssid=…` | Conexión WiFi en curso |
+
+Los comandos muy repetitivos (`ping`, chunks de imagen) van a **DEBUG** y no saturan la traza.
 
 ### Qué se registra automáticamente
 
@@ -315,7 +400,7 @@ Enviar esos ficheros **sin** incluir `.env` ni `secrets.json`.
 
 ---
 
-## 10. Solución rápida de problemas
+## 12. Solución rápida de problemas
 
 | Síntoma | Qué revisar |
 |---------|-------------|

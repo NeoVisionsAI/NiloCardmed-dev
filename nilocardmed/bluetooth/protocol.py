@@ -14,6 +14,7 @@ from nilocardmed.bluetooth.command_errors import BluetoothCommandError
 from nilocardmed.bluetooth.exceptions import BluetoothAuthError, BluetoothProtocolError
 from nilocardmed.bluetooth.models import CommandRequest, CommandResponse
 from nilocardmed.bluetooth.privileged import PRIVILEGED_COMMANDS, PrivilegedSessionStore, passwords_match
+from nilocardmed.operations_log import trace_ble_command
 from nilocardmed.config.manager import ConfigManager
 from nilocardmed.config.models import BluetoothSettings, EnvironmentSettings
 
@@ -98,6 +99,12 @@ class CommandRouter:
             and request.cmd not in settings.allowed_commands_without_auth
             and not self._context.sessions.validate(request.token)
         ):
+            trace_ble_command(
+                request.cmd,
+                ok=False,
+                error="unauthorized",
+                request_id=request.id,
+            )
             return CommandResponse(
                 ok=False,
                 cmd=request.cmd,
@@ -114,6 +121,12 @@ class CommandRouter:
                     if token:
                         self._context.privileged.elevate(token)
                 else:
+                    trace_ble_command(
+                        request.cmd,
+                        ok=False,
+                        error="privileged_auth_required",
+                        request_id=request.id,
+                    )
                     return CommandResponse(
                         ok=False,
                         cmd=request.cmd,
@@ -123,6 +136,12 @@ class CommandRouter:
 
         handler = self._handlers.get(request.cmd)
         if handler is None:
+            trace_ble_command(
+                request.cmd,
+                ok=False,
+                error="comando no soportado",
+                request_id=request.id,
+            )
             return CommandResponse(
                 ok=False,
                 cmd=request.cmd,
@@ -132,8 +151,21 @@ class CommandRouter:
 
         try:
             data = handler(self._context, request)
+            trace_ble_command(
+                request.cmd,
+                ok=True,
+                request_id=request.id,
+                payload=request.payload,
+            )
             return CommandResponse(ok=True, cmd=request.cmd, id=request.id, data=data)
         except BluetoothCommandError as exc:
+            trace_ble_command(
+                request.cmd,
+                ok=False,
+                error=exc.as_error_string(),
+                request_id=request.id,
+                payload=request.payload,
+            )
             return CommandResponse(
                 ok=False,
                 cmd=request.cmd,
@@ -141,9 +173,21 @@ class CommandRouter:
                 error=exc.as_error_string(),
             )
         except BluetoothAuthError as exc:
+            trace_ble_command(
+                request.cmd,
+                ok=False,
+                error=str(exc),
+                request_id=request.id,
+            )
             return CommandResponse(ok=False, cmd=request.cmd, id=request.id, error=str(exc))
         except Exception as exc:
             logger.exception("Error ejecutando comando %s", request.cmd)
+            trace_ble_command(
+                request.cmd,
+                ok=False,
+                error=f"error interno: {exc}",
+                request_id=request.id,
+            )
             return CommandResponse(
                 ok=False,
                 cmd=request.cmd,

@@ -13,6 +13,7 @@ from nilocardmed.bluetooth.exceptions import BluetoothBackendError, BluetoothCon
 from nilocardmed.bluetooth.framing import BleTransport
 from nilocardmed.bluetooth.protocol import CommandRouter
 from nilocardmed.config.models import BluetoothSettings
+from nilocardmed.operations_log import trace_ble_client
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,14 @@ class BluezBluetoothBackend(BluetoothBackend):
             self.settings.service_uuid,
             self.settings.ble_framing_enabled,
         )
+        from nilocardmed.operations_log import trace_system
+
+        trace_system(
+            event="bluetooth_activo",
+            detail="GATT publicado",
+            device_name=self.settings.device_name,
+            adapter=adapter_address,
+        )
 
         ble = peripheral.Peripheral(
             adapter_address,
@@ -202,9 +211,11 @@ class BluezBluetoothBackend(BluetoothBackend):
         if notifying:
             self._tx_characteristic = characteristic
             logger.info("Cliente BLE suscrito a notificaciones TX")
+            trace_ble_client(event="conectado", detail="suscrito a notificaciones TX")
         else:
             self._tx_characteristic = None
             logger.info("Cliente BLE canceló notificaciones TX")
+            trace_ble_client(event="desconectado", detail="canceló notificaciones TX")
 
 
 def select_backend(settings: BluetoothSettings, router: CommandRouter) -> BluetoothBackend:

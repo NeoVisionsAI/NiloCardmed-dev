@@ -25,6 +25,7 @@ from nilocardmed.bluetooth.service import BluetoothService
 from nilocardmed.cardmed.cli import run_cardmed_cli
 from nilocardmed.resilience.cli import run_health_cli
 from nilocardmed.resilience.supervisor import ResilienceSupervisor
+from nilocardmed.operations_log import trace_system
 from nilocardmed.storage.manager import StorageManager
 from nilocardmed.system.watchdog import Watchdog
 from nilocardmed.telemetry.store import telemetry
@@ -43,6 +44,7 @@ def run_daemon() -> int:
 
     logger.info("Iniciando NiloCardmed v%s", __version__)
     logger.info("Entorno: %s", env.public_summary())
+    trace_system(event="arranque", version=__version__)
 
     telemetry.configure_persistence(env.data_dir / "telemetry.jsonl")
     telemetry.load_recent_from_disk()
