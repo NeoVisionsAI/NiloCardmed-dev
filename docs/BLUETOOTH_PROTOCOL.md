@@ -171,6 +171,24 @@ Lee un fragmento de la última captura en caché.
 }
 ```
 
+### `camera_test` (alias: `test_camera`)
+
+Lista cámaras y, si se indica `device` (o hay una sola), captura en el acto.
+
+**Petición (solo listar):**
+
+```json
+{"cmd":"camera_test","token":"…","id":"6b"}
+```
+
+**Petición (listar + capturar):**
+
+```json
+{"cmd":"camera_test","token":"…","device":"/dev/video0","mode":"chunked","id":"6c"}
+```
+
+**Respuesta OK (captura):** `cameras[]`, `device`, `capture` (metadatos chunked como `camera_capture_test`).
+
 ## Comandos Fase 7 — Muestreo
 
 ### `sampling_get`
@@ -219,6 +237,18 @@ Lista redes visibles.
 ```
 
 - `persist` (default `true`): guarda SSID/contraseña en `config.json`.
+
+**Respuesta OK:** incluye `success: true`, `connected`, `ssid`, `ip_address`, `connectivity_ok`, etc.
+
+**Error:** `wifi_connection_failed` si no conecta o no hay conectividad verificable.
+
+### `wifi_disconnect`
+
+Desconecta la interfaz WiFi.
+
+```json
+{"cmd":"wifi_disconnect","token":"…","id":"9b"}
+```
 
 ### `wifi_status`
 
@@ -281,6 +311,30 @@ Versión, uptime, disco, memoria e hint de actualización.
 ```json
 {"cmd":"system_info","token":"…","id":"40"}
 ```
+
+Incluye `power` (misma información que `battery_status`).
+
+### `battery_status` (alias: `power_status`, `battery`)
+
+Nivel de batería / fuentes de alimentación vía `/sys/class/power_supply`.
+
+```json
+{"cmd":"battery_status","token":"…","id":"40b"}
+```
+
+**Respuesta OK (con batería/UPS en kernel):**
+
+```json
+{
+  "available": true,
+  "level_percent": 73,
+  "status": "Discharging",
+  "primary": {"name": "battery", "type": "Battery", "capacity_percent": 73},
+  "sources": []
+}
+```
+
+**Sin sensor de batería** (Pi alimentada por USB/powerbank sin datos): `available: false`, `message` explicativo.
 
 ### `storage_status`
 

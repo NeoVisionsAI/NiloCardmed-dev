@@ -22,6 +22,7 @@ from nilocardmed.cardmed.handlers import (
 )
 from nilocardmed.resilience.handlers import handle_health_status
 from nilocardmed.system.handlers import (
+    handle_battery_status,
     handle_events_list,
     handle_sampler_history,
     handle_storage_status,
@@ -171,6 +172,43 @@ def handle_camera_capture_chunk(ctx: CommandContext, request: CommandRequest) ->
         raise BluetoothCommandError("invalid_parameter", str(exc)) from exc
 
 
+def handle_camera_test(ctx: CommandContext, request: CommandRequest) -> dict[str, Any]:
+    """Lista cámaras y captura una imagen (modo chunked por defecto) en un solo flujo."""
+    config = ctx.config_manager.get()
+    include = bool(request.payload.get("include_non_capture", False))
+    service = CameraService(config.camera, data_dir=ctx.env.data_dir)
+    try:
+        cameras = service.list_cameras(include_non_capture=include)
+    except CameraError as exc:
+        raise BluetoothCommandError("camera_error", str(exc)) from exc
+
+    camera_items = [_camera_device_to_dict(device) for device in cameras]
+    device = request.payload.get("device")
+    if not device and len(cameras) == 1:
+        device = str(cameras[0].path)
+    if not device:
+        return {
+            "cameras": camera_items,
+            "capture": None,
+            "hint": "Indica device (p. ej. /dev/video0) y repite camera_test",
+        }
+
+    capture_request = CommandRequest(
+        cmd="camera_capture_test",
+        token=request.token,
+        payload={
+            "device": device,
+            "mode": request.payload.get("mode", ctx.settings.capture_test_mode),
+        },
+    )
+    capture_data = handle_camera_capture_test(ctx, capture_request)
+    return {
+        "cameras": camera_items,
+        "device": device,
+        "capture": capture_data,
+    }
+
+
 def handle_sampling_get(ctx: CommandContext, _request: CommandRequest) -> dict[str, Any]:
     config = ctx.config_manager.get()
     window = evaluate_window(config.sampling)
@@ -240,7 +278,21 @@ def handle_wifi_connect(ctx: CommandContext, request: CommandRequest) -> dict[st
         ip=status.ip_address,
         persist=persist,
     )
-    return status.to_dict()
+    payload = status.to_dict()
+    payload["success"] = bool(status.connected)
+    return payload
+
+
+def handle_wifi_disconnect(ctx: CommandContext, _request: CommandRequest) -> dict[str, Any]:
+    config = ctx.config_manager.get()
+    service = WifiService(config.wifi, config_manager=ctx.config_manager)
+    try:
+        status = service.disconnect()
+    except WifiError as exc:
+        raise BluetoothCommandError("wifi_error", str(exc)) from exc
+    payload = status.to_dict()
+    payload["success"] = not status.connected
+    return payload
 
 
 def handle_wifi_status(ctx: CommandContext, request: CommandRequest) -> dict[str, Any]:
@@ -276,11 +328,13 @@ def register_operation_handlers(router) -> None:
         ("camera_list", handle_camera_list, ["list_cameras"]),
         ("camera_capture_test", handle_camera_capture_test, ["capture_test"]),
         ("camera_capture_chunk", handle_camera_capture_chunk, []),
+        ("camera_test", handle_camera_test, ["test_camera"]),
         ("sampling_get", handle_sampling_get, []),
         ("sampling_set_interval", handle_sampling_set_interval, ["set_interval"]),
         ("sampling_set_window", handle_sampling_set_window, ["set_monitor_window"]),
         ("wifi_scan", handle_wifi_scan, []),
         ("wifi_connect", handle_wifi_connect, ["wifi_configure"]),
+        ("wifi_disconnect", handle_wifi_disconnect, []),
         ("wifi_status", handle_wifi_status, []),
         ("wifi_test", handle_wifi_test, []),
         ("cardmed_get", handle_cardmed_get, ["get_cardmed_config"]),
@@ -288,6 +342,7 @@ def register_operation_handlers(router) -> None:
         ("cardmed_test", handle_cardmed_test, ["probar_cardmed", "test_cardmed", "probar"]),
         ("health_status", handle_health_status, ["health", "system_health"]),
         ("system_info", handle_system_info, []),
+        ("battery_status", handle_battery_status, ["power_status", "battery"]),
         ("storage_status", handle_storage_status, []),
         ("sampler_history", handle_sampler_history, []),
         ("events_list", handle_events_list, []),

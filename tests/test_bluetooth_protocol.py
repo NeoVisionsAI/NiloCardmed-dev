@@ -99,3 +99,13 @@ def test_system_info_and_time_get():
     events = _call("events_list", limit=5)
     assert events["ok"] is True
     assert "events" in events["data"]
+
+    battery = _call("battery_status")
+    assert battery["ok"] is True
+    assert "available" in battery["data"]
+
+    commands = _call("commands_list")
+    assert commands["ok"] is True
+    assert "battery_status" in commands["data"]["commands"]
+    assert "camera_test" in commands["data"]["commands"]
+    assert "wifi_disconnect" in commands["data"]["commands"]
