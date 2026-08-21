@@ -10,8 +10,9 @@ Type=oneshot
 RemainAfterExit=yes
 User=@NILOCARDMED_RUN_USER@
 Group=@NILOCARDMED_RUN_GROUP@
-SupplementaryGroups=docker
+SupplementaryGroups=docker video dialout plugdev
 WorkingDirectory=@INSTALL_DIR@
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=COMPOSE_PROJECT_NAME=@COMPOSE_PROJECT_NAME@
 Environment=COMPOSE_FILE=@COMPOSE_FILE@
 EnvironmentFile=-@INSTALL_DIR@/deploy.env
@@ -19,7 +20,7 @@ EnvironmentFile=-@INSTALL_DIR@/.env
 ExecStart=@DOCKER_COMPOSE_CMD@ up -d --remove-orphans
 ExecStop=@DOCKER_COMPOSE_CMD@ down
 ExecReload=@DOCKER_COMPOSE_CMD@ up -d --remove-orphans
-TimeoutStartSec=0
+TimeoutStartSec=300
 Restart=on-failure
 RestartSec=10
 

@@ -13,11 +13,13 @@ La Pi Zero W2 ya trae **WiFi y Bluetooth integrados** — no hay que instalar ha
 
 ## Resumen en 5 pasos (instalación en fábrica)
 
-1. Raspberry Pi OS + cámara USB conectada + acceso a Internet (WiFi o Ethernet).
-2. Clonar el proyecto en la Pi.
-3. Ejecutar **`sudo ./scripts/install.sh`** (instala Docker, BLE, WiFi, dependencias, configura `.env`/`deploy.env`, build e inicia el servicio).
-4. Revisar **`NILOCARDMED_SER__URL`** en `.env` si hace falta.
-5. Entregar el dispositivo: el operador lo configura **desde la tablet por Bluetooth** (WiFi, muestreo…).
+1. Raspberry Pi OS + acceso a Internet + cámara USB opcional al instalar.
+2. Clonar el repo en la Pi (cualquier ruta, p. ej. `~/dev/NiloCardmed-dev`).
+3. **`sudo ./scripts/install.sh`** — instala todo en **`/opt/nilocardmed`**, configura systemd y arranca.
+4. Revisar **`/opt/nilocardmed/.env`** → `NILOCARDMED_SER__URL` si hace falta.
+5. Entregar: operador configura WiFi/muestreo por tablet (BLE).
+
+> **Un solo comando:** desde el clone, `sudo ./scripts/install.sh` copia a `/opt/nilocardmed`, crea grupos, Docker, uuid, contraseña BLE y verifica que el contenedor arranca (sin cámara conectada = OK).
 
 ---
 

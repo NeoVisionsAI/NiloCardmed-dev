@@ -21,6 +21,8 @@ HOST_APT_PACKAGES=(
   git
 )
 
+REQUIRED_GROUPS=(docker video bluetooth dialout plugdev)
+
 ensure_apt_available() {
   if ! command -v apt-get >/dev/null 2>&1; then
     log_error "Instalación automática solo soportada en Debian / Raspberry Pi OS (apt-get)."
@@ -78,6 +80,44 @@ ensure_docker_installed() {
   log_info "Compose: $(docker compose version 2>/dev/null | head -1)"
 }
 
+ensure_group_exists() {
+  local group="$1"
+  if getent group "${group}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  case "${group}" in
+    docker | bluetooth | dialout | plugdev | video)
+      log_info "Creando grupo del sistema: ${group}"
+      if ! groupadd -r "${group}" 2>/dev/null && ! groupadd "${group}" 2>/dev/null; then
+        log_warn "No se pudo crear el grupo ${group} (puede crearse al instalar paquetes)"
+      fi
+      ;;
+    *)
+      log_warn "Grupo desconocido omitido: ${group}"
+      ;;
+  esac
+}
+
+ensure_run_user_groups() {
+  local run_user="$1"
+
+  if [[ -z "${run_user}" ]] || ! id "${run_user}" >/dev/null 2>&1; then
+    log_warn "Usuario ${run_user:-?} no existe — omitiendo grupos"
+    return 0
+  fi
+
+  local group
+  for group in "${REQUIRED_GROUPS[@]}"; do
+    ensure_group_exists "${group}"
+    if getent group "${group}" >/dev/null 2>&1; then
+      usermod -aG "${group}" "${run_user}" 2>/dev/null || true
+    fi
+  done
+
+  log_info "Usuario '${run_user}' en grupos: ${REQUIRED_GROUPS[*]} (los que existan)"
+}
+
 ensure_system_services() {
   log_info "=== Servicios del sistema ==="
 
@@ -92,7 +132,7 @@ ensure_system_services() {
     systemctl start bluetooth.service
     log_info "Bluetooth (bluez) activado"
   else
-    log_info "Servicio bluetooth.service no encontrado — comprueba paquete bluez"
+    log_warn "Servicio bluetooth.service no encontrado"
   fi
 
   if systemctl list-unit-files NetworkManager.service >/dev/null 2>&1; then
@@ -100,27 +140,8 @@ ensure_system_services() {
     systemctl start NetworkManager.service
     log_info "NetworkManager activado (WiFi vía nmcli)"
   else
-    log_info "NetworkManager no disponible — WiFi desde la app puede no funcionar"
+    log_warn "NetworkManager no disponible — WiFi desde la app puede no funcionar"
   fi
-}
-
-ensure_run_user_groups() {
-  local run_user="$1"
-
-  if [[ -z "${run_user}" ]] || ! id "${run_user}" >/dev/null 2>&1; then
-    log_info "Usuario ${run_user:-?} no existe — omitiendo grupos (ajusta NILOCARDMED_RUN_USER en deploy.env)"
-    return 0
-  fi
-
-  local group
-  for group in docker video bluetooth dialout plugdev; do
-    if getent group "${group}" >/dev/null 2>&1; then
-      usermod -aG "${group}" "${run_user}" 2>/dev/null || true
-    fi
-  done
-
-  log_info "Usuario '${run_user}' añadido a grupos: docker, video, bluetooth, dialout, plugdev (si existen)"
-  log_info "Nota: cierra sesión y vuelve a entrar para que los grupos surtan efecto sin sudo."
 }
 
 verify_host_ready() {
@@ -148,8 +169,47 @@ verify_host_ready() {
   log_info "Host listo para NiloCardmed."
 }
 
-# Instala todo lo necesario en la Raspberry Pi (idempotente).
-# Uso: install_host_dependencies [usuario]
+verify_service_and_container() {
+  local service="${NILOCARDMED_SERVICE_NAME:-nilocardmed}"
+  local attempt
+
+  log_info "=== Verificación post-instalación ==="
+
+  for attempt in $(seq 1 45); do
+    if systemctl is-failed --quiet "${service}.service"; then
+      log_error "Servicio ${service} en estado failed"
+      journalctl -u "${service}.service" -n 40 --no-pager || true
+      return 1
+    fi
+    if systemctl is-active --quiet "${service}.service"; then
+      break
+    fi
+    sleep 2
+  done
+
+  if ! systemctl is-active --quiet "${service}.service"; then
+    log_error "Servicio ${service} no arrancó a tiempo"
+    journalctl -u "${service}.service" -n 40 --no-pager || true
+    return 1
+  fi
+
+  if ! run_compose_in_install_dir ps --status running 2>/dev/null | grep -q nilocardmed; then
+    log_warn "Contenedor aún no aparece como running; esperando..."
+    sleep 5
+  fi
+
+  if run_compose_in_install_dir ps 2>/dev/null | grep -qE 'Up|running'; then
+    log_info "Contenedor Docker en ejecución"
+    run_compose_in_install_dir ps || true
+    return 0
+  fi
+
+  log_error "El contenedor no está en ejecución"
+  journalctl -u "${service}.service" -n 40 --no-pager || true
+  run_compose_in_install_dir ps 2>/dev/null || true
+  return 1
+}
+
 install_host_dependencies() {
   local run_user="${1:-${SUDO_USER:-$(id -un)}}"
 

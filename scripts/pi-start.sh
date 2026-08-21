@@ -33,7 +33,7 @@ Uso: pi-start.sh <comando> [opciones]
 Comandos:
   check     Comprobaciones previas (Docker, cámara, BLE, WiFi…)
   start     check + generar override + docker compose up -d
-  install   check + install.sh (systemd, arranque automático al boot)
+  install   check + install.sh → /opt/nilocardmed (instalación fábrica)
   status    Estado del contenedor y salud
   stop      docker compose down (usa deploy.env, proyecto nilocardmed)
   logs      docker compose logs -f --tail=100
@@ -249,17 +249,7 @@ ensure_deploy_flags() {
 }
 
 compose_cmd() {
-  local -a cmd
-  cmd=( ${DOCKER_COMPOSE_CMD} )
-  local IFS=':'
-  read -ra files <<< "${COMPOSE_FILE}"
-  for f in "${files[@]}"; do
-    cmd+=( -f "${INSTALL_DIR}/${f}" )
-  done
-  if [[ -f "${INSTALL_DIR}/docker-compose.override.yml" ]]; then
-    cmd+=( -f "${INSTALL_DIR}/docker-compose.override.yml" )
-  fi
-  "${cmd[@]}" "$@"
+  run_compose_in_install_dir "$@"
 }
 
 prepare_compose() {
@@ -358,10 +348,9 @@ cmd_trace() {
 
 main() {
   parse_args "$@"
-  export INSTALL_DIR="${INSTALL_DIR:-${REPO_ROOT}}"
+  export INSTALL_DIR="${INSTALL_DIR:-$(resolve_install_dir_from_repo "${REPO_ROOT}")}"
   export DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-${INSTALL_DIR}/deploy.env}"
   load_deploy_env
-  INSTALL_DIR="${NILOCARDMED_INSTALL_DIR:-${INSTALL_DIR}}"
 
   if ! run_checks; then
     if [[ "${CHECK_ONLY}" == true ]]; then
@@ -381,7 +370,7 @@ main() {
       log_error "install requiere root: sudo ./scripts/pi-start.sh install"
       exit 1
     fi
-    exec bash "${INSTALL_DIR}/scripts/install.sh"
+    exec bash "${REPO_ROOT}/scripts/install.sh"
   fi
 
   start_stack

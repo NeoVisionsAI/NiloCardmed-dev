@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Instala NiloCardmed en Raspberry Pi (dependencias + Docker + systemd).
-# Uso:
+#
+# Uso típico en fábrica (desde clone en ~/dev o /opt):
 #   sudo ./scripts/install.sh
-#   sudo INSTALL_DIR=/opt/nilocardmed ./scripts/install.sh
-#   sudo ./scripts/install.sh --skip-host-deps   # solo app (Docker ya instalado)
-#   sudo DEPLOY_ENV_FILE=/ruta/deploy.env ./scripts/install.sh
+#
+# Instala siempre en NILOCARDMED_INSTALL_DIR (/opt/nilocardmed por defecto),
+# configura systemd, Docker, BLE, WiFi y arranca el servicio.
+#
+# Opciones:
+#   --skip-host-deps   Docker/apt ya instalados
+#   INSTALL_DIR=/ruta    Forzar directorio (dev); por defecto /opt/nilocardmed
 
 set -euo pipefail
 
@@ -22,16 +27,20 @@ for arg in "$@"; do
       cat <<'EOF'
 Uso: sudo ./scripts/install.sh [opciones]
 
-Instala dependencias del host (apt, Docker, BLE, WiFi), configura .env/deploy.env,
-construye la imagen Docker e instala el servicio systemd.
+Instalación completa para fábrica (repetible en N dispositivos):
+  1. Paquetes apt + Docker + servicios (BLE, WiFi, D-Bus)
+  2. Grupos del usuario (docker, video, bluetooth…)
+  3. Copia del proyecto a /opt/nilocardmed (por defecto)
+  4. deploy.env + .env (uuid, contraseña BLE, flags producción)
+  5. Build Docker + systemd + arranque verificado
 
 Opciones:
-  --skip-host-deps   No instala paquetes ni Docker (solo NiloCardmed)
+  --skip-host-deps   Omitir apt/Docker (solo aplicación)
   -h, --help         Esta ayuda
 
-Variables de entorno:
-  INSTALL_DIR        Directorio de instalación (default: repo actual o NILOCARDMED_INSTALL_DIR)
-  SKIP_HOST_DEPS     true = equivalente a --skip-host-deps
+Variables:
+  INSTALL_DIR              Directorio destino (default: NILOCARDMED_INSTALL_DIR)
+  SKIP_HOST_DEPS=true      Igual que --skip-host-deps
 EOF
       exit 0
       ;;
@@ -44,66 +53,49 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-export INSTALL_DIR="${INSTALL_DIR:-${REPO_ROOT}}"
-export DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-${INSTALL_DIR}/deploy.env}"
+# --- 1. Resolver rutas y usuario ---
+INSTALL_DIR="$(resolve_install_dir_from_repo "${REPO_ROOT}")"
+export INSTALL_DIR
+export DEPLOY_ENV_FILE="${INSTALL_DIR}/deploy.env"
 
-# Usuario de ejecución: priorizar quien ejecuta sudo, no "pi" de la plantilla
-RUN_USER="${SUDO_USER:-$(id -un)}"
-if [[ -f "${REPO_ROOT}/deploy.env" ]]; then
-  # shellcheck disable=SC1091
-  source "${REPO_ROOT}/deploy.env" 2>/dev/null || true
-  RUN_USER="${NILOCARDMED_RUN_USER:-${RUN_USER}}"
-elif [[ -f "${REPO_ROOT}/deploy.env.example" ]]; then
-  # shellcheck disable=SC1091
-  source "${REPO_ROOT}/deploy.env.example" 2>/dev/null || true
-  RUN_USER="${NILOCARDMED_RUN_USER:-${RUN_USER}}"
+INVOKING_USER="${SUDO_USER:-$(id -un)}"
+if [[ "${INVOKING_USER}" == "root" ]]; then
+  INVOKING_USER="$(getent passwd 1000 | cut -d: -f1 || echo root)"
 fi
-NILOCARDMED_RUN_USER="${RUN_USER}"
-resolve_run_user "${SUDO_USER:-root}"
-RUN_USER="${NILOCARDMED_RUN_USER}"
+export NILOCARDMED_RUN_USER="${INVOKING_USER}"
+resolve_run_user "${INVOKING_USER}"
 
-log_info "Instalando NiloCardmed en ${INSTALL_DIR} (usuario: ${RUN_USER})"
+log_info "=== NiloCardmed — instalación ==="
+log_info "Origen:  ${REPO_ROOT}"
+log_info "Destino: ${INSTALL_DIR}"
+log_info "Usuario: ${NILOCARDMED_RUN_USER} (grupo ${NILOCARDMED_RUN_GROUP})"
 
+# --- 2. Host (apt, Docker, grupos) ---
 # shellcheck source=lib/install-host-deps.sh
 source "${SCRIPT_DIR}/lib/install-host-deps.sh"
-install_host_dependencies "${RUN_USER}"
+install_host_dependencies "${NILOCARDMED_RUN_USER}"
 
-# En instalación de producción, usar NILOCARDMED_INSTALL_DIR si existe en deploy.env.example
-if [[ -f "${REPO_ROOT}/deploy.env.example" ]]; then
-  # shellcheck disable=SC1091
-  source "${REPO_ROOT}/deploy.env.example" 2>/dev/null || true
-fi
-if [[ "${INSTALL_DIR}" == "${REPO_ROOT}" && -n "${NILOCARDMED_INSTALL_DIR:-}" ]]; then
-  INSTALL_DIR="${NILOCARDMED_INSTALL_DIR}"
-  export INSTALL_DIR
-  DEPLOY_ENV_FILE="${INSTALL_DIR}/deploy.env"
-  export DEPLOY_ENV_FILE
-fi
+# --- 3. Copiar proyecto al destino de producción ---
+sync_project_to_install_dir "${REPO_ROOT}" "${INSTALL_DIR}"
 
-if [[ "${INSTALL_DIR}" != "${REPO_ROOT}" ]]; then
-  log_info "Copiando proyecto a ${INSTALL_DIR}"
-  mkdir -p "${INSTALL_DIR}"
-  rsync -a --delete \
-    --exclude '.git' \
-    --exclude '.venv' \
-    --exclude 'data' \
-    --exclude '__pycache__' \
-    "${REPO_ROOT}/" "${INSTALL_DIR}/"
-fi
-
-# deploy.env + .env desde plantillas; UUID BLE persistente; contraseña interactiva
+# --- 4. Configuración (.env, deploy.env, uuid, contraseña) ---
 # shellcheck source=lib/setup-env.sh
 source "${INSTALL_DIR}/scripts/lib/setup-env.sh"
 setup_deploy_and_app_env "${INSTALL_DIR}"
 
+# --- 5. Cargar deploy.env del destino ---
+export INSTALL_DIR
+export DEPLOY_ENV_FILE="${INSTALL_DIR}/deploy.env"
 load_deploy_env
 ensure_run_user_groups "${NILOCARDMED_RUN_USER}"
 ensure_host_directories
 
+# --- 6. Compose override (hot-plug cámara, BLE, WiFi) ---
 INSTALL_DIR="${INSTALL_DIR}" DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE}" \
   bash "${INSTALL_DIR}/scripts/generate-compose-override.sh"
 
-log_info "Construyendo imagen Docker (plataforma: ${DOCKER_DEFAULT_PLATFORM:-linux/arm/v7})"
+# --- 7. Build imagen ---
+log_info "=== Build Docker (plataforma: ${DOCKER_DEFAULT_PLATFORM:-linux/arm/v7}) ==="
 log_info "En Pi Zero la primera build puede tardar 15-30 minutos..."
 (
   cd "${INSTALL_DIR}"
@@ -120,25 +112,37 @@ log_info "En Pi Zero la primera build puede tardar 15-30 minutos..."
     --build-arg LOG_DIR="${CONTAINER_LOG_DIR:-/var/log/nilocardmed}"
 )
 
+# --- 8. systemd ---
 service_path="/etc/systemd/system/${NILOCARDMED_SERVICE_NAME}.service"
-log_info "Instalando unidad systemd: ${service_path}"
+log_info "=== systemd: ${service_path} ==="
 render_template \
   "${INSTALL_DIR}/deploy/systemd/nilocardmed.service.in" \
   "${service_path}"
 
-# Asegurar acceso a docker.sock para el usuario del servicio
 ensure_run_user_groups "${NILOCARDMED_RUN_USER}"
 
 systemctl daemon-reload
 systemctl enable "${NILOCARDMED_SERVICE_NAME}.service"
+
+# Parar contenedor previo si existía (compose project correcto)
+run_compose_in_install_dir down --remove-orphans 2>/dev/null || true
+
 systemctl restart "${NILOCARDMED_SERVICE_NAME}.service"
 
-log_info "Estado del servicio:"
-systemctl --no-pager status "${NILOCARDMED_SERVICE_NAME}.service" || true
+if ! verify_service_and_container; then
+  log_error "Instalación incompleta — revisa los logs arriba"
+  exit 1
+fi
 
-log_info "Instalación completada."
-log_info "Device ID (SER): $(read_env_value "${INSTALL_DIR}/.env" NILOCARDMED_SER__DEVICE_ID || echo '?')"
-log_info "Nombre BLE: $(read_env_value "${INSTALL_DIR}/.env" NILOCARDMED_BLUETOOTH__DEVICE_NAME || echo '?')"
-log_info "Identidad: ${HOST_DATA_DIR:-/var/lib/nilocardmed/data}/device-identity.env"
-log_info "Logs: journalctl -u ${NILOCARDMED_SERVICE_NAME} -f"
-log_info "Docker: cd ${INSTALL_DIR} && ${DOCKER_COMPOSE_CMD} ps"
+log_info ""
+log_info "=== Instalación completada ==="
+log_info "Directorio:  ${INSTALL_DIR}"
+log_info "Device ID:   $(read_env_value "${INSTALL_DIR}/.env" NILOCARDMED_SER__DEVICE_ID || echo '?')"
+log_info "Nombre BLE:  $(read_env_value "${INSTALL_DIR}/.env" NILOCARDMED_BLUETOOTH__DEVICE_NAME || echo '?')"
+log_info "Identidad:   ${HOST_DATA_DIR:-/var/lib/nilocardmed/data}/device-identity.env"
+log_info ""
+log_info "Comandos útiles:"
+log_info "  sudo systemctl status ${NILOCARDMED_SERVICE_NAME}"
+log_info "  sudo ${INSTALL_DIR}/scripts/pi-start.sh status"
+log_info "  sudo ${INSTALL_DIR}/scripts/pi-start.sh trace"
+log_info "  journalctl -u ${NILOCARDMED_SERVICE_NAME} -f"

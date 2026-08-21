@@ -22,12 +22,18 @@ out: list[str] = []
 found = False
 for line in lines:
     if line.startswith(f"{key}="):
-        out.append(f"{key}={value}")
+        if " " in value or '"' in value or "'" in value:
+            out.append(f'{key}="{value.replace(chr(34), "")}"')
+        else:
+            out.append(f"{key}={value}")
         found = True
     else:
         out.append(line)
 if not found:
-    out.append(f"{key}={value}")
+    if " " in value or '"' in value or "'" in value:
+        out.append(f'{key}="{value.replace(chr(34), "")}"')
+    else:
+        out.append(f"{key}={value}")
 path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text("\n".join(out) + "\n", encoding="utf-8")
 PY
@@ -162,6 +168,25 @@ sync_deploy_run_user() {
   fi
 }
 
+ensure_deploy_production_flags() {
+  local deploy_file="$1"
+
+  update_env_file "${deploy_file}" "ENABLE_WIFI" "true"
+  update_env_file "${deploy_file}" "ENABLE_BLUETOOTH" "true"
+  update_env_file "${deploy_file}" "ENABLE_CAMERA_HOTPLUG" "true"
+  update_env_file "${deploy_file}" "MOUNT_USB_BUS" "true"
+  update_env_file "${deploy_file}" "VIDEO_DEVICE_REQUIRED" "false"
+  update_env_file "${deploy_file}" "DOCKER_DEFAULT_PLATFORM" "linux/arm/v7"
+
+  if command -v docker >/dev/null 2>&1; then
+    local docker_bin
+    docker_bin="$(command -v docker)"
+    update_env_file "${deploy_file}" "DOCKER_COMPOSE_CMD" "${docker_bin} compose"
+  fi
+
+  log_info "deploy.env: flags de producción aplicados (WiFi, BLE, hot-plug cámara)"
+}
+
 setup_deploy_and_app_env() {
   local install_dir="$1"
   local deploy_example="${install_dir}/deploy.env.example"
@@ -188,6 +213,9 @@ setup_deploy_and_app_env() {
   # shellcheck disable=SC1090
   set -a && source "${deploy_file}" && set +a
   sync_deploy_run_user "${deploy_file}"
+  ensure_deploy_production_flags "${deploy_file}"
+  # shellcheck disable=SC1090
+  set -a && source "${deploy_file}" && set +a
   local data_dir="${HOST_DATA_DIR:-/var/lib/nilocardmed/data}"
 
   if [[ ! -f "${env_file}" ]]; then

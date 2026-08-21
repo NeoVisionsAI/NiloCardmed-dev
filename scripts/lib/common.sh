@@ -10,6 +10,10 @@ log_error() {
   echo "[nilocardmed][ERROR] $*" >&2
 }
 
+log_warn() {
+  echo "[nilocardmed][AVISO] $*" >&2
+}
+
 is_true() {
   case "${1,,}" in
     1 | true | yes | on) return 0 ;;
@@ -22,6 +26,50 @@ require_command() {
     log_error "Comando requerido no encontrado: $1"
     exit 1
   fi
+}
+
+# Directorio de instalación: INSTALL_DIR explícito, o NILOCARDMED_INSTALL_DIR del deploy, o repo.
+resolve_install_dir_from_repo() {
+  local repo_root="$1"
+  local candidate="${repo_root}"
+
+  if [[ -n "${INSTALL_DIR:-}" ]]; then
+    printf '%s\n' "${INSTALL_DIR}"
+    return 0
+  fi
+
+  if [[ -f "${repo_root}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${repo_root}/deploy.env" && set +a
+    candidate="${NILOCARDMED_INSTALL_DIR:-${repo_root}}"
+  elif [[ -f "${repo_root}/deploy.env.example" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${repo_root}/deploy.env.example" && set +a
+    candidate="${NILOCARDMED_INSTALL_DIR:-${repo_root}}"
+  fi
+
+  printf '%s\n' "${candidate}"
+}
+
+sync_project_to_install_dir() {
+  local src="$1"
+  local dst="$2"
+
+  if [[ "$(realpath -m "${src}")" == "$(realpath -m "${dst}")" ]]; then
+    log_info "Instalación in-place en ${dst}"
+    return 0
+  fi
+
+  log_info "Sincronizando ${src} → ${dst}"
+  mkdir -p "${dst}"
+  rsync -a --delete \
+    --exclude '.git' \
+    --exclude '.venv' \
+    --exclude 'data' \
+    --exclude '__pycache__' \
+    --exclude 'deploy.env' \
+    --exclude '.env' \
+    "${src}/" "${dst}/"
 }
 
 load_deploy_env() {
@@ -41,7 +89,9 @@ load_deploy_env() {
 
   if [[ -z "${preset_install_dir}" ]]; then
     INSTALL_DIR="${NILOCARDMED_INSTALL_DIR:-${repo_root}}"
+    DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-${INSTALL_DIR}/deploy.env}"
   fi
+
   NILOCARDMED_SERVICE_NAME="${NILOCARDMED_SERVICE_NAME:-nilocardmed}"
   NILOCARDMED_RUN_USER="${NILOCARDMED_RUN_USER:-${SUDO_USER:-$(id -un)}}"
   NILOCARDMED_RUN_GROUP="${NILOCARDMED_RUN_GROUP:-${NILOCARDMED_RUN_USER}}"
@@ -54,6 +104,17 @@ load_deploy_env() {
   SYSTEMD_REQUIRES="${SYSTEMD_REQUIRES:-docker.service}"
   SYSTEMD_WANTS="${SYSTEMD_WANTS:-network-online.target}"
   resolve_run_user "${SUDO_USER:-root}"
+  resolve_docker_compose_cmd
+}
+
+resolve_docker_compose_cmd() {
+  local docker_bin
+  docker_bin="$(command -v docker 2>/dev/null || true)"
+  if [[ -z "${docker_bin}" ]]; then
+    return 0
+  fi
+  DOCKER_COMPOSE_CMD="${docker_bin} compose"
+  export DOCKER_COMPOSE_CMD
 }
 
 # Ajusta NILOCARDMED_RUN_USER/GROUP si el valor de deploy.env no existe en el sistema.
@@ -62,12 +123,17 @@ resolve_run_user() {
   local user="${NILOCARDMED_RUN_USER:-${fallback}}"
   local group="${NILOCARDMED_RUN_GROUP:-${user}}"
 
+  if [[ "${fallback}" == "root" || -z "${fallback}" ]]; then
+    fallback="$(getent passwd 1000 | cut -d: -f1 || true)"
+    fallback="${fallback:-root}"
+  fi
+
   if ! id "${user}" >/dev/null 2>&1; then
     if id "${fallback}" >/dev/null 2>&1; then
       log_info "Usuario '${user}' no existe; usando '${fallback}'"
       user="${fallback}"
     else
-      log_info "Usuario '${user}' no existe; usando 'root'"
+      log_warn "Usuario '${user}' no existe; usando 'root' para systemd"
       user="root"
     fi
   fi
@@ -111,4 +177,26 @@ ensure_host_directories() {
   mkdir -p "${data_dir}" "${logs_dir}"
   resolve_run_user "${SUDO_USER:-root}"
   chown -R "${NILOCARDMED_RUN_USER}:${NILOCARDMED_RUN_GROUP}" "${data_dir}" "${logs_dir}"
+}
+
+compose_cmd() {
+  local -a cmd
+  cmd=( ${DOCKER_COMPOSE_CMD} )
+  local IFS=':'
+  read -ra files <<< "${COMPOSE_FILE}"
+  for f in "${files[@]}"; do
+    cmd+=( -f "${INSTALL_DIR}/${f}" )
+  done
+  if [[ -f "${INSTALL_DIR}/docker-compose.override.yml" ]]; then
+    cmd+=( -f "${INSTALL_DIR}/docker-compose.override.yml" )
+  fi
+  "${cmd[@]}" "$@"
+}
+
+run_compose_in_install_dir() {
+  (
+    cd "${INSTALL_DIR}"
+    export COMPOSE_PROJECT_NAME COMPOSE_FILE
+    compose_cmd "$@"
+  )
 }
