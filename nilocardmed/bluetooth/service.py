@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 
+from nilocardmed.bluetooth.adapter_visibility import ensure_adapter_visibility
 from nilocardmed.bluetooth.backends import BluetoothBackend, select_backend
 from nilocardmed.bluetooth.exceptions import BluetoothConfigError
 from nilocardmed.bluetooth.protocol import CommandRouter, build_router
@@ -48,12 +49,17 @@ class BluetoothService:
             self._backend = select_backend(self.settings, self.router)
         return self._backend
 
+    def _adapter_address(self) -> str | None:
+        return self.settings.adapter_address
+
     def start(self, shutdown: threading.Event | None = None) -> None:
         if self._thread and self._thread.is_alive():
             return
         if not self.settings.enabled:
             logger.info("Bluetooth deshabilitado; no se inicia GATT")
             return
+
+        self.ensure_adapter_visibility()
 
         self._master_shutdown = shutdown or self._shutdown
         backend = self.backend
@@ -77,6 +83,7 @@ class BluetoothService:
             logger.info("Reiniciando servicio Bluetooth")
             self._stop_backend()
             time.sleep(2.0)
+            self.ensure_adapter_visibility()
             self._backend = None
             self.start(master)
 
@@ -87,6 +94,20 @@ class BluetoothService:
         if callable(checker):
             return bool(checker())
         return False
+
+    def ensure_adapter_visibility(self) -> bool:
+        """Mantiene discoverable/pairable en on (reactiva si BlueZ los apagó)."""
+        result = ensure_adapter_visibility(adapter_address=self._adapter_address())
+        if not result["ok"]:
+            logger.warning(
+                "Discoverable/pairable no confirmados tras reintento: %s",
+                result.get("after"),
+            )
+        return bool(result["ok"])
+
+    def refresh_adapter_visibility(self) -> None:
+        """Alias retrocompatible."""
+        self.ensure_adapter_visibility()
 
     def is_healthy(self) -> bool:
         if not self.settings.enabled:

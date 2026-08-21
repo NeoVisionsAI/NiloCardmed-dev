@@ -147,10 +147,17 @@ def run_daemon() -> int:
             bluetooth_service.backend.name,
             config.bluetooth.device_name,
         )
-        if config.resilience.enabled and config.resilience.bluetooth_supervisor_enabled:
+        if config.resilience.enabled and (
+            config.resilience.bluetooth_supervisor_enabled
+            or config.resilience.bluetooth_keep_discoverable_enabled
+        ):
             bluetooth_supervisor = BluetoothSupervisor(config_manager, bluetooth_service)
             bluetooth_supervisor.start(shutdown)
-            logger.info("Supervisor Bluetooth iniciado (reinicio automático GATT)")
+            logger.info(
+                "Supervisor Bluetooth iniciado (discoverable=%s, reinicio_gatt=%s)",
+                config.resilience.bluetooth_keep_discoverable_enabled,
+                config.resilience.bluetooth_supervisor_enabled,
+            )
     else:
         logger.info("Bluetooth deshabilitado")
 

@@ -1,4 +1,4 @@
-"""Supervisor BLE: reinicia GATT si deja de publicarse (24/7)."""
+"""Supervisor BLE: discoverable 24/7 + reinicio GATT si deja de publicarse."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class BluetoothSupervisor:
-    """Monitoriza el backend BLE y lo reinicia si el hilo GATT muere o deja de estar activo."""
+    """Monitoriza discoverable y reinicia GATT si el backend BLE deja de estar activo."""
 
     def __init__(
         self,
@@ -59,16 +59,20 @@ class BluetoothSupervisor:
             resilience = config.resilience
             interval = max(resilience.bluetooth_health_check_interval_seconds, 5)
 
-            if not config.bluetooth.enabled or not resilience.bluetooth_supervisor_enabled:
+            if not config.bluetooth.enabled:
                 if shutdown.wait(timeout=float(interval)):
                     break
                 continue
 
-            if not self._bluetooth_service.is_healthy():
-                if self._bluetooth_service.has_active_client():
-                    logger.debug("BLE con cliente activo; omitiendo reinicio automático")
-                else:
-                    self._maybe_restart(shutdown, resilience.bluetooth_restart_cooldown_seconds)
+            if resilience.bluetooth_keep_discoverable_enabled:
+                self._bluetooth_service.ensure_adapter_visibility()
+
+            if resilience.bluetooth_supervisor_enabled:
+                if not self._bluetooth_service.is_healthy():
+                    if self._bluetooth_service.has_active_client():
+                        logger.debug("BLE con cliente activo; omitiendo reinicio automático")
+                    else:
+                        self._maybe_restart(shutdown, resilience.bluetooth_restart_cooldown_seconds)
 
             if shutdown.wait(timeout=float(interval)):
                 break

@@ -44,10 +44,40 @@ def test_supervisor_restarts_unhealthy_bluetooth():
     assert supervisor.restart_count == 1
 
 
+def test_supervisor_keeps_discoverable_without_gatt_restart():
+    config = AppConfig(
+        resilience=ResilienceSettings(
+            bluetooth_supervisor_enabled=False,
+            bluetooth_keep_discoverable_enabled=True,
+            bluetooth_health_check_interval_seconds=5,
+        )
+    )
+    config_manager = MagicMock()
+    config_manager.get.return_value = config
+
+    bluetooth_service = MagicMock()
+    bluetooth_service.is_healthy.return_value = False
+
+    shutdown = threading.Event()
+
+    def stop_after_one(timeout: float) -> bool:
+        shutdown.set()
+        return True
+
+    shutdown.wait = stop_after_one  # type: ignore[method-assign]
+
+    supervisor = BluetoothSupervisor(config_manager, bluetooth_service)
+    supervisor.run(shutdown)
+
+    bluetooth_service.ensure_adapter_visibility.assert_called()
+    bluetooth_service.restart.assert_not_called()
+
+
 def test_supervisor_skips_when_disabled():
     config = AppConfig(
         resilience=ResilienceSettings(
             bluetooth_supervisor_enabled=False,
+            bluetooth_keep_discoverable_enabled=False,
             bluetooth_health_check_interval_seconds=5,
         )
     )

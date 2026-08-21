@@ -8,6 +8,7 @@ import shutil
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 
 from nilocardmed.bluetooth.exceptions import BluetoothBackendError, BluetoothConfigError
 from nilocardmed.bluetooth.framing import BleTransport
@@ -85,6 +86,7 @@ class BluezBluetoothBackend(BluetoothBackend):
         self._last_response = bytearray()
         self._peripheral = None
         self._gatt_registered = threading.Event()
+        self._advert_registered = threading.Event()
         self._master_shutdown: threading.Event | None = None
         self._started_at: float | None = None
         self._lifecycle_lock = threading.Lock()
@@ -96,6 +98,7 @@ class BluezBluetoothBackend(BluetoothBackend):
 
             self._local_stop.clear()
             self._gatt_registered.clear()
+            self._advert_registered.clear()
             self._started_at = time.monotonic()
             self._master_shutdown = shutdown
 
@@ -106,6 +109,7 @@ class BluezBluetoothBackend(BluetoothBackend):
                     logger.exception("Error en backend BlueZ (se reintentará vía supervisor)")
                 finally:
                     self._gatt_registered.clear()
+                    self._advert_registered.clear()
                     self._publish_thread = None
                     self._tx_characteristic = None
                     peripheral_ref = self._peripheral
@@ -129,6 +133,7 @@ class BluezBluetoothBackend(BluetoothBackend):
             self._tx_characteristic = None
             self._peripheral = None
             self._gatt_registered.clear()
+            self._advert_registered.clear()
             self._started_at = None
             self._local_stop.clear()
 
@@ -142,11 +147,142 @@ class BluezBluetoothBackend(BluetoothBackend):
             return False
         if self.has_active_client():
             return True
-        if not self._gatt_registered.is_set():
+        if not self._gatt_registered.is_set() or not self._advert_registered.is_set():
             if self._started_at is not None and time.monotonic() - self._started_at < 45.0:
                 return True
             return False
         return True
+
+    @staticmethod
+    def _wait_registration_event(
+        ready: threading.Event,
+        failed: threading.Event,
+        stop_check: Callable[[], bool],
+        *,
+        timeout: float = 20.0,
+    ) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if ready.is_set():
+                return True
+            if failed.is_set():
+                return False
+            if stop_check():
+                return False
+            time.sleep(0.05)
+        return False
+
+    def _purge_stale_advertisement(self, ble) -> None:
+        try:
+            ble.ad_manager.unregister_advertisement(ble.advert)
+        except Exception as exc:
+            logger.debug("purge unregister_advertisement: %s", exc)
+        try:
+            ble.advert.remove_from_connection()
+        except Exception as exc:
+            logger.debug("purge remove advert: %s", exc)
+
+    def _publish_peripheral(self, ble, shutdown: threading.Event) -> None:
+        """Publica GATT + LE advertisement esperando confirmación de BlueZ."""
+        import dbus
+
+        for service in ble.services:
+            ble.app.add_managed_object(service)
+        for characteristic in ble.characteristics:
+            ble.app.add_managed_object(characteristic)
+        for descriptor in ble.descriptors:
+            ble.app.add_managed_object(descriptor)
+        ble._create_advertisement()
+
+        if not ble.dongle.powered:
+            ble.dongle.powered = True
+        try:
+            ble.dongle.discoverable = True
+        except Exception as exc:
+            logger.warning("No se pudo marcar adaptador discoverable: %s", exc)
+
+        self._purge_stale_advertisement(ble)
+
+        gatt_ready = threading.Event()
+        gatt_failed = threading.Event()
+        advert_ready = threading.Event()
+        advert_failed = threading.Event()
+        failure_messages: list[str] = []
+
+        def _on_gatt_ok() -> None:
+            logger.info("GATT application registered")
+            gatt_ready.set()
+
+        def _on_gatt_err(error) -> None:
+            message = f"Failed to register GATT application: {error}"
+            failure_messages.append(message)
+            logger.error(message)
+            gatt_failed.set()
+
+        def _on_advert_ok() -> None:
+            logger.info("BLE advertisement registrado")
+            advert_ready.set()
+
+        def _on_advert_err(error) -> None:
+            message = f"Failed to register advertisement: {error}"
+            failure_messages.append(message)
+            logger.error(message)
+            advert_failed.set()
+            try:
+                ble.mainloop.quit()
+            except Exception:
+                pass
+
+        ble.srv_mng.manager_methods.RegisterApplication(
+            ble.app.get_path(),
+            dbus.Dictionary({}, signature="sv"),
+            reply_handler=_on_gatt_ok,
+            error_handler=_on_gatt_err,
+        )
+
+        if not self._wait_registration_event(
+            gatt_ready,
+            gatt_failed,
+            lambda: self._should_stop(shutdown),
+            timeout=20.0,
+        ):
+            detail = failure_messages[-1] if failure_messages else "timeout registrando GATT"
+            raise BluetoothBackendError(detail)
+
+        ble.ad_manager.advert_mngr_methods.RegisterAdvertisement(
+            ble.advert.get_path(),
+            dbus.Dictionary({}, signature="sv"),
+            reply_handler=_on_advert_ok,
+            error_handler=_on_advert_err,
+        )
+
+        if not self._wait_registration_event(
+            advert_ready,
+            advert_failed,
+            lambda: self._should_stop(shutdown),
+            timeout=20.0,
+        ):
+            self._shutdown_peripheral(ble)
+            detail = failure_messages[-1] if failure_messages else "timeout registrando advertisement"
+            raise BluetoothBackendError(detail)
+
+        self._gatt_registered.set()
+        self._advert_registered.set()
+        from nilocardmed.operations_log import trace_system
+
+        trace_system(
+            event="bluetooth_activo",
+            detail="GATT y advertisement publicados",
+            device_name=self.settings.device_name,
+            adapter=ble.dongle.address,
+        )
+        logger.info("GATT BLE registrado y publicando (GATT + advertisement OK)")
+
+        try:
+            ble.mainloop.run()
+        finally:
+            self._gatt_registered.clear()
+            self._advert_registered.clear()
 
     @staticmethod
     def _shutdown_peripheral(ble) -> None:
@@ -181,6 +317,11 @@ class BluezBluetoothBackend(BluetoothBackend):
         except Exception as exc:
             logger.debug("remove application: %s", exc)
 
+        try:
+            ble.advert.remove_from_connection()
+        except Exception as exc:
+            logger.debug("remove advertisement: %s", exc)
+
         time.sleep(0.5)
 
     def _run_peripheral(self, shutdown: threading.Event) -> None:
@@ -200,6 +341,10 @@ class BluezBluetoothBackend(BluetoothBackend):
 
         adapter_address = self._resolve_adapter_address(bz_adapter)
         adapter = bz_adapter.Adapter(adapter_address)
+        try:
+            adapter.discoverable = True
+        except Exception as exc:
+            logger.warning("No se pudo marcar adaptador discoverable al arrancar: %s", exc)
         if adapter.alias != self.settings.device_name:
             adapter.alias = self.settings.device_name
             logger.info(
@@ -243,40 +388,35 @@ class BluezBluetoothBackend(BluetoothBackend):
             notify_callback=self._on_notify,
         )
 
-        publish_thread = threading.Thread(target=ble.publish, name="bluezero-publish", daemon=True)
+        publish_thread = threading.Thread(
+            target=self._publish_peripheral,
+            args=(ble, shutdown),
+            name="bluezero-publish",
+            daemon=True,
+        )
         self._publish_thread = publish_thread
         publish_thread.start()
 
-        stable_since: float | None = None
-        registration_deadline = time.monotonic() + 30.0
+        registration_deadline = time.monotonic() + 45.0
         while time.monotonic() < registration_deadline:
             if self._should_stop(shutdown):
                 return
-            if not publish_thread.is_alive():
-                raise BluetoothBackendError("Publicación GATT terminó antes de registrarse")
-            if stable_since is None:
-                stable_since = time.monotonic()
-            elif time.monotonic() - stable_since >= 2.0:
-                self._gatt_registered.set()
-                from nilocardmed.operations_log import trace_system
-
-                trace_system(
-                    event="bluetooth_activo",
-                    detail="GATT publicado",
-                    device_name=self.settings.device_name,
-                    adapter=adapter_address,
-                )
-                logger.info("GATT BLE registrado y publicando")
+            if self._gatt_registered.is_set() and self._advert_registered.is_set():
                 break
-            time.sleep(0.5)
+            if not publish_thread.is_alive():
+                raise BluetoothBackendError("Publicación BLE terminó antes de completar registro")
+            time.sleep(0.2)
 
-        if not self._gatt_registered.is_set() and not self._should_stop(shutdown):
-            raise BluetoothBackendError("Timeout esperando registro GATT")
+        if (
+            not self._gatt_registered.is_set() or not self._advert_registered.is_set()
+        ) and not self._should_stop(shutdown):
+            raise BluetoothBackendError("Timeout esperando GATT + advertisement")
 
         while not self._should_stop(shutdown):
             if not publish_thread.is_alive():
                 logger.error("Hilo publish GATT terminó inesperadamente")
                 self._gatt_registered.clear()
+                self._advert_registered.clear()
                 break
             shutdown.wait(timeout=1.0)
 

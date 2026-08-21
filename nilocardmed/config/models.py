@@ -414,6 +414,10 @@ class ResilienceSettings(BaseModel):
         le=3600,
         description="Mínimo entre reinicios automáticos del backend BLE",
     )
+    bluetooth_keep_discoverable_enabled: bool = Field(
+        default=True,
+        description="Mantiene discoverable/pairable en on y los restaura si BlueZ los apaga",
+    )
     health_treat_wifi_provisioning_as_degraded: bool = Field(
         default=True,
         description="WiFi sin SSID o desconectado en provisioning = degraded, no unhealthy",
