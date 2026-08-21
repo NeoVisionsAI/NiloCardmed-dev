@@ -24,6 +24,9 @@ RUN apt-get update \
         fswebcam \
         ffmpeg \
         gosu \
+        zlib1g \
+        libjpeg62-turbo \
+        libpng16-16 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid "${APP_GID}" "${APP_USER}" \
@@ -37,7 +40,22 @@ COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY pyproject.toml requirements.txt README.md ./
 COPY nilocardmed ./nilocardmed
 
-RUN pip install --no-cache-dir .
+# En ARM (Pi Zero) Pillow suele compilarse desde fuente: hace falta zlib/jpeg dev.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc \
+        python3-dev \
+        zlib1g-dev \
+        libjpeg62-turbo-dev \
+        libpng-dev \
+    && pip install --no-cache-dir . \
+    && apt-get purge -y --auto-remove \
+        gcc \
+        python3-dev \
+        zlib1g-dev \
+        libjpeg62-turbo-dev \
+        libpng-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN chmod +x /usr/local/bin/entrypoint.sh \
     && mkdir -p "${DATA_DIR}" "${LOG_DIR}" \
