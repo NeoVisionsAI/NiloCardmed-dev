@@ -27,6 +27,8 @@ RUN apt-get update \
         zlib1g \
         libjpeg62-turbo \
         libpng16-16 \
+        libglib2.0-0 \
+        libdbus-1-3 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid "${APP_GID}" "${APP_USER}" \
@@ -48,7 +50,7 @@ RUN apt-get update \
         zlib1g-dev \
         libjpeg62-turbo-dev \
         libpng-dev \
-    && pip install --no-cache-dir . \
+    && pip install --no-cache-dir ".[ble]" \
     && apt-get purge -y --auto-remove \
         gcc \
         python3-dev \
