@@ -59,6 +59,15 @@ ensure_bluez_experimental() {
     changed=true
   fi
 
+  if ! grep -qE '^KernelExperimental\s*=\s*true' "${conf}" 2>/dev/null; then
+    if grep -qE '^KernelExperimental\s*=' "${conf}" 2>/dev/null; then
+      sed -i 's/^KernelExperimental\s*=.*/KernelExperimental=true/' "${conf}"
+    elif grep -qE '^\[General\]' "${conf}" 2>/dev/null; then
+      sed -i '/^\[General\]/a KernelExperimental=true' "${conf}"
+    fi
+    changed=true
+  fi
+
   if [[ "${changed}" == true ]]; then
     echo "[nilocardmed] BlueZ: Experimental=true (LE advertisement requerido por Web Bluetooth)"
     systemctl restart bluetooth 2>/dev/null || service bluetooth restart 2>/dev/null || true

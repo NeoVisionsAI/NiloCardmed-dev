@@ -151,6 +151,24 @@ class BluezBluetoothBackend(BluetoothBackend):
             if self._started_at is not None and time.monotonic() - self._started_at < 45.0:
                 return True
             return False
+        try:
+            from nilocardmed.bluetooth.advertising_status import read_le_advertising_state
+
+            le_state = read_le_advertising_state()
+            if le_state.get("advertising") is False:
+                logger.warning(
+                    "GATT registrado pero LE Advertising=no (ActiveInstances=%s)",
+                    le_state.get("active_instances"),
+                )
+                return False
+            if le_state.get("advertising") is None and not le_state.get("le_advertising_active"):
+                logger.warning(
+                    "GATT registrado pero sin instancias LE activas (ActiveInstances=%s)",
+                    le_state.get("active_instances"),
+                )
+                return False
+        except Exception as exc:
+            logger.debug("No se pudo comprobar LE advertising: %s", exc)
         return True
 
     @staticmethod
@@ -202,6 +220,7 @@ class BluezBluetoothBackend(BluetoothBackend):
             logger.warning("No se pudo marcar adaptador discoverable: %s", exc)
 
         self._purge_stale_advertisement(ble)
+        purge_stale_bluez_registrations(getattr(ble.dongle, "address", None))
 
         gatt_ready = threading.Event()
         gatt_failed = threading.Event()
@@ -359,6 +378,13 @@ class BluezBluetoothBackend(BluetoothBackend):
             self.settings.service_uuid,
             self.settings.ble_framing_enabled,
         )
+
+        from nilocardmed.bluetooth.advertising_status import purge_stale_bluez_registrations
+
+        removed = purge_stale_bluez_registrations(adapter_address)
+        if removed:
+            logger.info("Limpieza BlueZ: %s registro(s) huérfano(s) eliminado(s)", removed)
+            time.sleep(1.0)
 
         ble = peripheral.Peripheral(
             adapter_address,

@@ -56,6 +56,17 @@ def _build_parser() -> argparse.ArgumentParser:
     info = sub.add_parser("info", help="Mostrar UUIDs y configuración BLE")
     info.add_argument("--json", action="store_true")
 
+    diag = sub.add_parser(
+        "diag",
+        help="Diagnóstico discoverable vs anuncio LE (por qué no aparece en escaneos)",
+    )
+    diag.add_argument("--json", action="store_true")
+    diag.add_argument(
+        "--purge",
+        action="store_true",
+        help="Eliminar registros GATT/advert huérfanos de bluezero en BlueZ",
+    )
+
     return parser
 
 
@@ -292,6 +303,41 @@ def run_bluetooth_cli(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "diag":
+            from nilocardmed.bluetooth.adapter_visibility import ensure_adapter_visibility
+            from nilocardmed.bluetooth.advertising_status import (
+                diagnose_bluetooth_visibility,
+                purge_stale_bluez_registrations,
+            )
+
+            adapter_address = config.bluetooth.adapter_address
+            if args.purge:
+                removed = purge_stale_bluez_registrations(adapter_address)
+                ensure_adapter_visibility(adapter_address=adapter_address)
+            else:
+                removed = 0
+
+            payload = diagnose_bluetooth_visibility(adapter_address=adapter_address)
+            payload["purged_registrations"] = removed
+            payload["backend"] = config.bluetooth.backend
+            payload["device_name"] = config.bluetooth.device_name
+
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                adapter = payload["adapter"]
+                print(f"Alias: {adapter.get('alias')}")
+                print(f"Powered: {adapter.get('powered')}")
+                print(f"Discoverable: {adapter.get('discoverable')}")
+                print(f"Pairable: {adapter.get('pairable')}")
+                print(f"LE Advertising: {adapter.get('advertising')}")
+                print(f"ActiveInstances: {adapter.get('active_instances')}")
+                print(f"Visible en escaneo BLE: {payload.get('visible_for_ble_scan')}")
+                print(f"Nota: {payload.get('note')}")
+                if removed:
+                    print(f"Registros huérfanos eliminados: {removed}")
+            return 0 if payload.get("visible_for_ble_scan") else 1
+
         if args.command == "info":
             payload = {
                 "enabled": config.bluetooth.enabled,

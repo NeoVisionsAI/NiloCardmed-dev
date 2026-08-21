@@ -230,6 +230,7 @@ def _build_parser() -> argparse.ArgumentParser:
     bt_sub.add_parser("run", help="Servidor GATT en primer plano")
     bt_sub.add_parser("test-session", help="Probar auth+ping (mock)")
     bt_sub.add_parser("info", help="UUIDs y configuración BLE")
+    bt_sub.add_parser("diag", help="Diagnóstico discoverable vs anuncio LE")
 
     cardmed = sub.add_parser("cardmed", help="Configuración y prueba CardMed")
     cardmed_sub = cardmed.add_subparsers(dest="cardmed_command", required=True)
