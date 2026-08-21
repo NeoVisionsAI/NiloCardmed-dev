@@ -106,6 +106,36 @@ ensure_bluezero_dbus_policy() {
   fi
 }
 
+ensure_bluez_experimental() {
+  local conf="/etc/bluetooth/main.conf"
+  local changed=false
+
+  if [[ ! -f "${conf}" ]]; then
+    log_warn "No se encontró ${conf} — omitiendo Experimental=true"
+    return 0
+  fi
+
+  if grep -qE '^[[:space:]]*Experimental[[:space:]]*=' "${conf}"; then
+    if grep -qE '^[[:space:]]*Experimental[[:space:]]*=[[:space:]]*true' "${conf}"; then
+      log_info "BlueZ Experimental=true ya configurado"
+      return 0
+    fi
+    sed -i 's/^[[:space:]]*Experimental[[:space:]]*=.*/Experimental = true/' "${conf}"
+    changed=true
+  elif grep -q '^\[General\]' "${conf}"; then
+    sed -i '/^\[General\]/a Experimental = true' "${conf}"
+    changed=true
+  else
+    printf '\n[General]\nExperimental = true\n' >> "${conf}"
+    changed=true
+  fi
+
+  if [[ "${changed}" == true ]]; then
+    log_info "BlueZ: Experimental=true (peripheral BLE GATT en Pi Zero W2)"
+    systemctl restart bluetooth.service 2>/dev/null || true
+  fi
+}
+
 ensure_run_user_groups() {
   local run_user="$1"
 
@@ -129,6 +159,7 @@ ensure_system_services() {
   log_info "=== Servicios del sistema ==="
 
   ensure_bluezero_dbus_policy
+  ensure_bluez_experimental
 
   systemctl enable dbus.service 2>/dev/null || true
   systemctl start dbus.service 2>/dev/null || true
@@ -246,6 +277,7 @@ install_host_dependencies() {
   if is_true "${SKIP_HOST_DEPS:-false}"; then
     log_info "SKIP_HOST_DEPS=true — omitiendo instalación de paquetes del host"
     ensure_run_user_groups "${run_user}"
+    ensure_bluez_experimental
     verify_host_ready
     return 0
   fi

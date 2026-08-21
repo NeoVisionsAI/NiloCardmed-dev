@@ -187,6 +187,27 @@ ensure_deploy_production_flags() {
   log_info "deploy.env: flags de producción aplicados (WiFi, BLE, hot-plug cámara)"
 }
 
+ensure_app_production_flags() {
+  local env_file="$1"
+
+  update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__ENABLED" "true"
+  update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__BACKEND" "bluez"
+  update_env_file "${env_file}" "NILOCARDMED_WIFI__ENABLED" "true"
+  log_info ".env: BLE backend=bluez, WiFi habilitado"
+}
+
+migrate_deploy_service_name_var() {
+  local deploy_file="$1"
+  local legacy new_name
+
+  legacy="$(read_env_value "${deploy_file}" "NILOCARDMED_SERVICE_NAME" || true)"
+  new_name="$(read_env_value "${deploy_file}" "SYSTEMD_UNIT_NAME" || true)"
+  if [[ -z "${new_name}" && -n "${legacy}" ]]; then
+    update_env_file "${deploy_file}" "SYSTEMD_UNIT_NAME" "${legacy}"
+    log_info "deploy.env: SYSTEMD_UNIT_NAME=${legacy} (migrado desde NILOCARDMED_SERVICE_NAME)"
+  fi
+}
+
 sync_compose_file_env() {
   local install_dir="$1"
   local deploy_file="${install_dir}/deploy.env"
@@ -231,6 +252,7 @@ setup_deploy_and_app_env() {
   # shellcheck disable=SC1090
   set -a && source "${deploy_file}" && set +a
   sync_deploy_run_user "${deploy_file}"
+  migrate_deploy_service_name_var "${deploy_file}"
   ensure_deploy_production_flags "${deploy_file}"
   # shellcheck disable=SC1090
   set -a && source "${deploy_file}" && set +a
@@ -252,6 +274,7 @@ setup_deploy_and_app_env() {
   update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__DEVICE_NAME" "${BLE_DEVICE_NAME}"
   update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__PASSWORD" "${BLUETOOTH_PASSWORD}"
   update_env_file "${env_file}" "NILOCARDMED_SER__DEVICE_ID" "${DEVICE_UUID}"
+  ensure_app_production_flags "${env_file}"
 
   log_info "Configuración aplicada:"
   log_info "  device_id (SER)=${DEVICE_UUID}"

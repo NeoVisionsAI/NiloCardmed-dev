@@ -33,3 +33,13 @@ def test_save_splits_secrets_and_uses_atomic_config(tmp_path: Path):
     reloaded = ConfigManager(env).load()
     assert reloaded.wifi.password.get_secret_value() == "wifi-secret"
     assert reloaded.bluetooth.password.get_secret_value() == "bt-secret"
+
+
+def test_environment_settings_accepts_comma_separated_int_lists(monkeypatch):
+    monkeypatch.setenv("NILOCARDMED_SER__SUCCESS_STATUS_CODES", "200,201,202,204")
+    monkeypatch.setenv("NILOCARDMED_SER__RETRY_ON_STATUS_CODES", "408,429,500,502,503,504")
+
+    env = EnvironmentSettings()
+
+    assert env.ser.success_status_codes == [200, 201, 202, 204]
+    assert env.ser.retry_on_status_codes == [408, 429, 500, 502, 503, 504]

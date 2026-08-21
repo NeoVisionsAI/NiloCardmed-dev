@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import NoDecode
 
 
 def _parse_int_list(value: Any) -> list[int]:
@@ -39,8 +40,8 @@ def _parse_json_dict(value: Any) -> dict[str, Any]:
     raise TypeError("Se esperaba dict o JSON object")
 
 
-IntList = Annotated[list[int], BeforeValidator(_parse_int_list)]
-StrList = Annotated[list[str], BeforeValidator(_parse_str_list)]
+IntList = Annotated[list[int], BeforeValidator(_parse_int_list), NoDecode]
+StrList = Annotated[list[str], BeforeValidator(_parse_str_list), NoDecode]
 JsonDict = Annotated[dict[str, Any], BeforeValidator(_parse_json_dict)]
 
 
