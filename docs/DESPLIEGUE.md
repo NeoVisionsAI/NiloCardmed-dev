@@ -4,7 +4,7 @@ Instalación paso a paso en **Raspberry Pi Zero W2**. Hay dos momentos distintos
 
 | Momento | Quién | Qué se hace |
 |---------|-------|-------------|
-| **Fábrica / instalación** | Técnico (una vez) | Flash Raspberry Pi OS, instalar Docker, ejecutar `install.sh` |
+| **Fábrica / instalación** | Técnico (una vez) | Flash Raspberry Pi OS, clonar repo, ejecutar `install.sh` (instala todo) |
 | **Campo / puesta en marcha** | Operador con tablet | Conectar por BLE y configurar WiFi, muestreo, CardMed, etc. |
 
 La Pi Zero W2 ya trae **WiFi y Bluetooth integrados** — no hay que instalar hardware extra. Solo hay que activarlos en `deploy.env` para que el contenedor Docker pueda usarlos.
@@ -13,10 +13,10 @@ La Pi Zero W2 ya trae **WiFi y Bluetooth integrados** — no hay que instalar ha
 
 ## Resumen en 5 pasos (instalación en fábrica)
 
-1. Raspberry Pi OS + Docker + cámara USB conectada.
-2. Clonar el proyecto y copiar plantillas de configuración.
-3. Editar **`.env`** (mínimo: contraseña BLE y URL SER) y **`deploy.env`** (hardware).
-4. Ejecutar **`sudo ./scripts/install.sh`**.
+1. Raspberry Pi OS + cámara USB conectada + acceso a Internet (WiFi o Ethernet).
+2. Clonar el proyecto en la Pi.
+3. Ejecutar **`sudo ./scripts/install.sh`** (instala Docker, BLE, WiFi, dependencias, configura `.env`/`deploy.env`, build e inicia el servicio).
+4. Revisar **`NILOCARDMED_SER__URL`** en `.env` si hace falta.
 5. Entregar el dispositivo: el operador lo configura **desde la tablet por Bluetooth** (WiFi, muestreo…).
 
 ---
@@ -28,20 +28,25 @@ La Pi Zero W2 ya trae **WiFi y Bluetooth integrados** — no hay que instalar ha
 | Hardware | Raspberry Pi Zero W2 (WiFi + BLE integrados) |
 | Cámara | USB UVC (`/dev/video0`) |
 | Almacenamiento | microSD ≥ 32 GB (recomendado 128 GB) |
-| Red | No hace falta WiFi en la instalación; se configura después por tablet |
+| Red | Internet en la instalación (apt + descarga imagen Docker); WiFi operativo se configura después por tablet |
 | Tablet | Android con BLE + app web (ver [OPERATOR_GUIDE.md](OPERATOR_GUIDE.md)) |
-| Software en la Pi | Raspberry Pi OS, **Docker Engine** y **Compose v2** |
+| Software en la Pi | **Raspberry Pi OS** (Debian). Docker y el resto los instala **`install.sh`** |
 
-Comprobar Docker:
+### Qué instala `install.sh` automáticamente
+
+- Paquetes **apt**: `python3`, `rsync`, `openssl`, `uuid-runtime`, `bluez`, `dbus`, `network-manager`, `v4l-utils`, `git`, …
+- **Docker Engine** + **Compose v2** (script oficial get.docker.com)
+- Servicios: `docker`, `bluetooth`, `NetworkManager`, `dbus`
+- Grupos del usuario (`docker`, `video`, `bluetooth`, `dialout`, `plugdev`)
+- Configuración NiloCardmed: `.env`, `deploy.env`, uuid, systemd, build
+
+Si Docker ya está instalado: `sudo ./scripts/install.sh --skip-host-deps`
+
+Comprobar tras instalar:
 
 ```bash
 docker --version
 docker compose version
-```
-
-Comprobar cámara (antes o después de instalar):
-
-```bash
 ls -l /dev/video*
 ```
 
