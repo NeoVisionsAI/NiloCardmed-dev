@@ -7,8 +7,7 @@ services:
   nilocardmed:
     cap_add:
       - SYS_TIME
-    group_add:
-      - ${CONTAINER_GROUP_ADD:-video}
+    # group_add con GID numérico en docker-compose.override.yml (generate-compose-override.sh)
     # Pi Zero W2: limitar RAM para evitar OOM en el host (~512 MiB total)
     deploy:
       resources:
