@@ -312,7 +312,7 @@ def run_bluetooth_cli(argv: list[str] | None = None) -> int:
 
             adapter_address = config.bluetooth.adapter_address
             if args.purge:
-                removed = purge_stale_bluez_registrations(adapter_address)
+                removed = purge_stale_bluez_registrations(adapter_address, aggressive=True)
                 ensure_adapter_visibility(adapter_address=adapter_address)
             else:
                 removed = 0
@@ -333,6 +333,12 @@ def run_bluetooth_cli(argv: list[str] | None = None) -> int:
                 print(f"LE Advertising: {adapter.get('advertising')}")
                 print(f"ActiveInstances: {adapter.get('active_instances')}")
                 print(f"Visible en escaneo BLE: {payload.get('visible_for_ble_scan')}")
+                experimental = payload.get("bluez_experimental")
+                if experimental is not None:
+                    print(f"BlueZ Experimental: {experimental}")
+                hint = payload.get("hint")
+                if hint:
+                    print(f"Aviso: {hint}")
                 print(f"Nota: {payload.get('note')}")
                 if removed:
                     print(f"Registros huérfanos eliminados: {removed}")

@@ -43,8 +43,16 @@ def read_le_advertising_state(*, timeout: float = 5.0) -> dict[str, Any]:
     }
 
 
-def purge_stale_bluez_registrations(adapter_address: str | None = None) -> int:
-    """Desregistra aplicaciones GATT y anuncios LE huérfanos en BlueZ."""
+def purge_stale_bluez_registrations(
+    adapter_address: str | None = None,
+    *,
+    aggressive: bool = False,
+) -> int:
+    """Desregistra aplicaciones GATT y anuncios LE huérfanos en BlueZ.
+
+    Con ``aggressive=True`` elimina cualquier GATT/advert del adaptador (no solo
+    rutas bluezero), útil cuando ``ActiveInstances`` bloquea un nuevo anuncio.
+    """
     try:
         import dbus
     except ImportError:
@@ -85,8 +93,13 @@ def purge_stale_bluez_registrations(adapter_address: str | None = None) -> int:
 
     for path, interfaces in objects.items():
         path_str = str(path)
+        is_bluezero = (
+            constants.BLUEZERO_DBUS_OBJECT in path_str
+            or "bluezero" in path_str.lower()
+            or "ukbaz" in path_str.lower()
+        )
         if GATT_APP_IFACE in interfaces and gatt_manager is not None:
-            if constants.BLUEZERO_DBUS_OBJECT in path_str or "bluezero" in path_str.lower():
+            if aggressive or is_bluezero:
                 try:
                     gatt_manager.UnregisterApplication(path)
                     removed += 1
@@ -95,7 +108,7 @@ def purge_stale_bluez_registrations(adapter_address: str | None = None) -> int:
                     logger.debug("UnregisterApplication %s: %s", path_str, exc)
 
         if LE_ADVERT_IFACE in interfaces and ad_manager is not None:
-            if "bluezero" in path_str.lower() or "ukbaz" in path_str.lower():
+            if aggressive or is_bluezero:
                 try:
                     ad_manager.UnregisterAdvertisement(path)
                     removed += 1
@@ -106,15 +119,38 @@ def purge_stale_bluez_registrations(adapter_address: str | None = None) -> int:
     return removed
 
 
+def read_bluez_experimental_enabled() -> bool | None:
+    """Lee ``Experimental=true`` de ``/etc/bluetooth/main.conf`` si existe."""
+    conf_path = "/etc/bluetooth/main.conf"
+    try:
+        with open(conf_path, encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if stripped.lower().startswith("experimental="):
+                    value = stripped.split("=", 1)[1].strip().lower()
+                    return value in {"1", "true", "yes", "on"}
+    except OSError:
+        return None
+    return None
+
+
 def diagnose_bluetooth_visibility(*, adapter_address: str | None = None) -> dict[str, Any]:
     """Informe operativo: discoverable vs anuncio LE real."""
     adapter = read_le_advertising_state()
+    experimental = read_bluez_experimental_enabled()
     return {
         "adapter": adapter,
         "le_advertising_active": adapter.get("le_advertising_active"),
         "visible_for_ble_scan": bool(adapter.get("le_advertising_active")),
+        "bluez_experimental": experimental,
         "note": (
             "Discoverable=yes solo afecta emparejamiento clásico; "
             "Web Bluetooth y escáneres BLE requieren LE Advertising activo."
+        ),
+        "hint": (
+            "Si RegisterAdvertisement falla, verifica Experimental=true y "
+            "KernelExperimental=true en /etc/bluetooth/main.conf y reinicia bluetooth."
+            if experimental is False
+            else None
         ),
     }

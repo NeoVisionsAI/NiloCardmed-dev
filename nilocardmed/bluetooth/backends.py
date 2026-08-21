@@ -180,6 +180,21 @@ class BluezBluetoothBackend(BluetoothBackend):
         except Exception as exc:
             logger.debug("purge remove advert: %s", exc)
 
+    @staticmethod
+    def _trim_advertisement_for_legacy_adv(ble) -> None:
+        """Evita paquete AD >31 bytes: UUID 128-bit + nombre largo no caben juntos."""
+        try:
+            # Web Bluetooth usa namePrefix; el servicio sigue disponible vía GATT.
+            ble.advert.service_UUIDs = []
+        except Exception as exc:
+            logger.debug("Anuncio: no se pudo omitir ServiceUUIDs: %s", exc)
+        try:
+            from bluezero import constants
+
+            ble.advert.props[constants.LE_ADVERTISEMENT_IFACE]["Appearance"] = None
+        except Exception as exc:
+            logger.debug("Anuncio: no se pudo omitir Appearance: %s", exc)
+
     def _publish_peripheral(self, ble, shutdown: threading.Event) -> None:
         """Publica GATT + LE advertisement esperando confirmación de BlueZ."""
         import dbus
@@ -193,6 +208,7 @@ class BluezBluetoothBackend(BluetoothBackend):
         for descriptor in ble.descriptors:
             ble.app.add_managed_object(descriptor)
         ble._create_advertisement()
+        self._trim_advertisement_for_legacy_adv(ble)
 
         if not ble.dongle.powered:
             ble.dongle.powered = True
@@ -202,13 +218,37 @@ class BluezBluetoothBackend(BluetoothBackend):
             logger.warning("No se pudo marcar adaptador discoverable: %s", exc)
 
         self._purge_stale_advertisement(ble)
-        purge_stale_bluez_registrations(getattr(ble.dongle, "address", None))
+        purge_stale_bluez_registrations(
+            getattr(ble.dongle, "address", None),
+            aggressive=True,
+        )
 
         failure_messages: list[str] = []
+        advert_attempts = {"count": 0}
+
+        def _mark_ble_active() -> None:
+            from nilocardmed.operations_log import trace_system
+
+            trace_system(
+                event="bluetooth_activo",
+                detail="GATT y advertisement publicados",
+                device_name=self.settings.device_name,
+                adapter=ble.dongle.address,
+            )
+            logger.info("GATT BLE registrado y publicando (GATT + advertisement OK)")
+
+        def _register_advertisement() -> None:
+            ble.ad_manager.advert_mngr_methods.RegisterAdvertisement(
+                ble.advert.get_path(),
+                dbus.Dictionary({}, signature="sv"),
+                reply_handler=_on_advert_ok,
+                error_handler=_on_advert_err,
+            )
 
         def _on_gatt_ok() -> None:
             logger.info("GATT application registered")
             self._gatt_registered.set()
+            _register_advertisement()
 
         def _on_gatt_err(error) -> None:
             message = f"Failed to register GATT application: {error}"
@@ -223,20 +263,32 @@ class BluezBluetoothBackend(BluetoothBackend):
             logger.info("BLE advertisement registrado")
             self._advert_registered.set()
             if self._gatt_registered.is_set():
-                from nilocardmed.operations_log import trace_system
-
-                trace_system(
-                    event="bluetooth_activo",
-                    detail="GATT y advertisement publicados",
-                    device_name=self.settings.device_name,
-                    adapter=ble.dongle.address,
-                )
-                logger.info("GATT BLE registrado y publicando (GATT + advertisement OK)")
+                _mark_ble_active()
 
         def _on_advert_err(error) -> None:
+            advert_attempts["count"] += 1
             message = f"Failed to register advertisement: {error}"
+            if advert_attempts["count"] <= 2:
+                logger.warning(
+                    "%s; limpiando anuncios huérfanos y reintentando (%s/2)",
+                    message,
+                    advert_attempts["count"],
+                )
+                purge_stale_bluez_registrations(
+                    getattr(ble.dongle, "address", None),
+                    aggressive=True,
+                )
+                self._purge_stale_advertisement(ble)
+                time.sleep(1.0)
+                _register_advertisement()
+                return
+
             failure_messages.append(message)
             logger.error(message)
+            try:
+                ble.srv_mng.unregister_application(ble.app)
+            except Exception as exc:
+                logger.debug("rollback unregister_application: %s", exc)
             try:
                 ble.mainloop.quit()
             except Exception:
@@ -247,13 +299,6 @@ class BluezBluetoothBackend(BluetoothBackend):
             dbus.Dictionary({}, signature="sv"),
             reply_handler=_on_gatt_ok,
             error_handler=_on_gatt_err,
-        )
-
-        ble.ad_manager.advert_mngr_methods.RegisterAdvertisement(
-            ble.advert.get_path(),
-            dbus.Dictionary({}, signature="sv"),
-            reply_handler=_on_advert_ok,
-            error_handler=_on_advert_err,
         )
 
         try:
@@ -343,7 +388,7 @@ class BluezBluetoothBackend(BluetoothBackend):
 
         from nilocardmed.bluetooth.advertising_status import purge_stale_bluez_registrations
 
-        removed = purge_stale_bluez_registrations(adapter_address)
+        removed = purge_stale_bluez_registrations(adapter_address, aggressive=True)
         if removed:
             logger.info("Limpieza BlueZ: %s registro(s) huérfano(s) eliminado(s)", removed)
             time.sleep(1.0)

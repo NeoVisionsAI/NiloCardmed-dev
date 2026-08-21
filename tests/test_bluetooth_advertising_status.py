@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from nilocardmed.bluetooth.advertising_status import (
     diagnose_bluetooth_visibility,
@@ -30,3 +30,10 @@ def test_diagnose_reports_not_visible_without_le_advert():
 
     assert report["visible_for_ble_scan"] is False
     assert report["adapter"]["discoverable"] is True
+
+
+def test_read_bluez_experimental_enabled_reads_main_conf():
+    from nilocardmed.bluetooth.advertising_status import read_bluez_experimental_enabled
+
+    with patch("builtins.open", mock_open(read_data="[General]\nExperimental=true\n")):
+        assert read_bluez_experimental_enabled() is True
