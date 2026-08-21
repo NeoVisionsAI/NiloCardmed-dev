@@ -15,6 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+export REPO_ROOT
 
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
@@ -77,6 +78,7 @@ install_host_dependencies "${NILOCARDMED_RUN_USER}"
 
 # --- 3. Copiar proyecto al destino de producción ---
 sync_project_to_install_dir "${REPO_ROOT}" "${INSTALL_DIR}"
+ensure_bluezero_dbus_policy
 
 # --- 4. Configuración (.env, deploy.env, uuid, contraseña) ---
 # shellcheck source=lib/setup-env.sh

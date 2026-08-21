@@ -227,12 +227,13 @@ def select_backend(settings: BluetoothSettings, router: CommandRouter) -> Blueto
     if backend == "auto":
         if shutil.which("bluetoothctl") or os.path.exists("/var/run/dbus/system_bus_socket"):
             try:
+                import dbus  # noqa: F401
                 import bluezero  # noqa: F401
 
                 logger.debug("Backend Bluetooth auto -> bluez")
                 return BluezBluetoothBackend(settings, router)
-            except ImportError:
-                logger.warning("BlueZ detectado pero bluezero no instalado; usando mock")
+            except ImportError as exc:
+                logger.warning("BlueZ detectado pero dependencias BLE no instaladas (%s); usando mock", exc)
         logger.warning("Backend Bluetooth auto -> mock")
         return MockBluetoothBackend(settings, router)
     raise BluetoothConfigError(f"Backend Bluetooth no soportado: {backend}")

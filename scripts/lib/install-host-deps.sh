@@ -99,6 +99,32 @@ ensure_group_exists() {
   esac
 }
 
+ensure_bluezero_dbus_policy() {
+  local policy_src=""
+  local candidate
+  for candidate in \
+    "${REPO_ROOT:-}/deploy/dbus/ukBaz.bluezero.conf" \
+    "${INSTALL_DIR:-}/deploy/dbus/ukBaz.bluezero.conf"; do
+    if [[ -f "${candidate}" ]]; then
+      policy_src="${candidate}"
+      break
+    fi
+  done
+  local policy_dst="/etc/dbus-1/system.d/ukBaz.bluezero.conf"
+
+  if [[ -z "${policy_src}" ]]; then
+    log_warn "Política D-Bus bluezero no encontrada — BLE GATT puede fallar"
+    return 0
+  fi
+
+  if [[ ! -f "${policy_dst}" ]] || ! cmp -s "${policy_src}" "${policy_dst}"; then
+    log_info "Instalando política D-Bus bluezero: ${policy_dst}"
+    cp "${policy_src}" "${policy_dst}"
+    chmod 644 "${policy_dst}"
+    systemctl reload dbus.service 2>/dev/null || true
+  fi
+}
+
 ensure_run_user_groups() {
   local run_user="$1"
 
@@ -120,6 +146,8 @@ ensure_run_user_groups() {
 
 ensure_system_services() {
   log_info "=== Servicios del sistema ==="
+
+  ensure_bluezero_dbus_policy
 
   systemctl enable dbus.service 2>/dev/null || true
   systemctl start dbus.service 2>/dev/null || true
