@@ -42,16 +42,17 @@ COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY pyproject.toml requirements.txt README.md ./
 COPY nilocardmed ./nilocardmed
 
-# En ARM (Pi Zero) Pillow y dbus-python suelen compilarse: libs dev temporales.
-# bluezero se instala --no-deps (evita PyGObject/pycairo por pip).
+# Pillow y dbus-python compilan en ARM; bluezero --no-deps (sin PyGObject/pycairo).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         gcc \
         python3-dev \
+        pkg-config \
         zlib1g-dev \
         libjpeg62-turbo-dev \
         libpng-dev \
         libdbus-1-dev \
+        libglib2.0-dev \
         libglib2.0-0 \
         libdbus-1-3 \
     && pip install --no-cache-dir . \
@@ -60,10 +61,12 @@ RUN apt-get update \
     && apt-get purge -y --auto-remove \
         gcc \
         python3-dev \
+        pkg-config \
         zlib1g-dev \
         libjpeg62-turbo-dev \
         libpng-dev \
         libdbus-1-dev \
+        libglib2.0-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN chmod +x /usr/local/bin/entrypoint.sh \
