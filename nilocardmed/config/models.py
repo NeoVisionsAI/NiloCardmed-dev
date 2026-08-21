@@ -551,6 +551,13 @@ class EnvironmentSettings(BaseSettings):
     def config_path(self) -> Path:
         return self.data_dir / self.config_filename
 
+    @staticmethod
+    def _compare_config_value(value: Any) -> Any:
+        """Valor comparable para merge env (SecretStr no se enmascara en model_dump)."""
+        if isinstance(value, SecretStr):
+            return value.get_secret_value()
+        return value
+
     def apply_to(self, config: AppConfig) -> AppConfig:
         """Fusiona valores de entorno sobre la configuración cargada."""
         merged = config.model_copy(deep=True)
@@ -566,11 +573,14 @@ class EnvironmentSettings(BaseSettings):
         ):
             section_env = getattr(self, section_name)
             section_merged = getattr(merged, section_name)
-            defaults = type(section_env)().model_dump(mode="json")
-            env_values = section_env.model_dump(mode="json")
-            for key, value in env_values.items():
-                if value != defaults.get(key):
-                    setattr(section_merged, key, getattr(section_env, key))
+            section_defaults = type(section_env)()
+            for field_name in type(section_env).model_fields:
+                env_value = getattr(section_env, field_name)
+                default_value = getattr(section_defaults, field_name)
+                if self._compare_config_value(env_value) != self._compare_config_value(
+                    default_value
+                ):
+                    setattr(section_merged, field_name, env_value)
         return merged
 
     def public_summary(self) -> dict[str, Any]:

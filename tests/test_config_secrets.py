@@ -69,3 +69,19 @@ def test_environment_settings_accepts_json_str_list(monkeypatch):
     env = EnvironmentSettings()
 
     assert env.bluetooth.allowed_commands_without_auth == ["auth"]
+
+
+def test_apply_to_overrides_secrets_password_from_env(monkeypatch, tmp_path: Path):
+    """NILOCARDMED_*__PASSWORD debe pisar secrets.json (SecretStr no enmascarado)."""
+    secrets_path(tmp_path).write_text(
+        json.dumps({"bluetooth.password": "changeme"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("NILOCARDMED_BLUETOOTH__PASSWORD", "cardmed")
+    env = EnvironmentSettings().model_copy(update={"data_dir": tmp_path})
+
+    config = ConfigManager(env).load()
+
+    assert config.bluetooth.password.get_secret_value() == "cardmed"
