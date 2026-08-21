@@ -3,4 +3,5 @@ pydantic-settings>=2.0,<3
 httpx>=0.27,<1
 Pillow>=10.0,<12
 dbus-python>=1.2,<3
+PyGObject>=3.42,<4
 bluezero>=0.7,<1

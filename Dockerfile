@@ -28,6 +28,8 @@ RUN apt-get update \
         libpng16-16 \
         libglib2.0-0 \
         libdbus-1-3 \
+        libgirepository-1.0-1 \
+        gir1.2-glib-2.0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid "${APP_GID}" "${APP_USER}" \
@@ -52,8 +54,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         libpng-dev \
         libdbus-1-dev \
         libglib2.0-dev \
-    && grep -Ev '^(bluezero|#)' requirements.txt > /tmp/requirements-no-bluezero.txt \
-    && pip install -r /tmp/requirements-no-bluezero.txt \
+        libgirepository1.0-dev \
+    && grep -Ev '^(bluezero|PyGObject|#)' requirements.txt > /tmp/requirements-no-ble.txt \
+    && pip install -r /tmp/requirements-no-ble.txt \
+    && pip install "PyGObject>=3.42,<4" \
     && pip install --no-deps "bluezero>=0.7,<1" \
     && apt-get purge -y --auto-remove \
         gcc \
@@ -64,6 +68,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         libpng-dev \
         libdbus-1-dev \
         libglib2.0-dev \
+        libgirepository1.0-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Capa rápida: solo código de la app (cambios frecuentes).

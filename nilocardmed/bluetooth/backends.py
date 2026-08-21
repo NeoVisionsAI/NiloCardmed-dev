@@ -99,9 +99,12 @@ class BluezBluetoothBackend(BluetoothBackend):
             from bluezero import adapter as bz_adapter
             from bluezero import peripheral
         except ImportError as exc:
-            raise BluetoothBackendError(
-                "bluezero no instalado. Instala con: pip install nilocardmed[ble]"
-            ) from exc
+            missing = str(exc)
+            if "gi" in missing or "GLib" in missing:
+                hint = "PyGObject (gi) no disponible — rebuild imagen Docker con libgirepository"
+            else:
+                hint = "Dependencias BLE incompletas (bluezero/dbus-python/PyGObject)"
+            raise BluetoothBackendError(f"{hint}: {exc}") from exc
 
         if self.settings.dbus_system_bus_address:
             os.environ["DBUS_SYSTEM_BUS_ADDRESS"] = self.settings.dbus_system_bus_address

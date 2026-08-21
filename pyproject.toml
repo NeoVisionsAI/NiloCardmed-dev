@@ -22,7 +22,7 @@ nilocardmed-cardmed = "nilocardmed.cardmed.cli:main"
 nilocardmed-health = "nilocardmed.resilience.cli:main"
 
 [project.optional-dependencies]
-ble = ["bluezero>=0.7,<1", "dbus-python>=1.2,<3"]
+ble = ["bluezero>=0.7,<1", "dbus-python>=1.2,<3", "PyGObject>=3.42,<4"]
 dev = ["pytest>=8,<9", "pytest-cov>=5,<6"]
 
 [build-system]
