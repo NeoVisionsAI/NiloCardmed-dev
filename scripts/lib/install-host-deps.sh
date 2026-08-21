@@ -136,6 +136,55 @@ ensure_bluez_experimental() {
   fi
 }
 
+ensure_bluez_auto_enable() {
+  local conf="/etc/bluetooth/main.conf"
+  local changed=false
+
+  if [[ ! -f "${conf}" ]]; then
+    return 0
+  fi
+
+  if grep -qE '^[[:space:]]*AutoEnable[[:space:]]*=' "${conf}"; then
+    if grep -qE '^[[:space:]]*AutoEnable[[:space:]]*=[[:space:]]*true' "${conf}"; then
+      log_info "BlueZ AutoEnable=true ya configurado"
+      return 0
+    fi
+    sed -i 's/^[[:space:]]*AutoEnable[[:space:]]*=.*/AutoEnable = true/' "${conf}"
+    changed=true
+  elif grep -q '^\[General\]' "${conf}"; then
+    sed -i '/^\[General\]/a AutoEnable = true' "${conf}"
+    changed=true
+  else
+    printf '\n[General]\nAutoEnable = true\n' >> "${conf}"
+    changed=true
+  fi
+
+  if [[ "${changed}" == true ]]; then
+    log_info "BlueZ: AutoEnable=true (encender hci0 al arrancar)"
+    systemctl restart bluetooth.service 2>/dev/null || true
+  fi
+}
+
+ensure_bluetooth_powered() {
+  local script=""
+
+  for script in \
+    "${INSTALL_DIR:-}/scripts/ensure-bluetooth-powered.sh" \
+    "${REPO_ROOT:-}/scripts/ensure-bluetooth-powered.sh"; do
+    if [[ -f "${script}" ]]; then
+      chmod +x "${script}" 2>/dev/null || true
+      if "${script}"; then
+        return 0
+      fi
+      log_warn "No se pudo encender Bluetooth — GATT puede fallar con 'Not Powered'"
+      return 1
+    fi
+  done
+
+  log_warn "ensure-bluetooth-powered.sh no encontrado"
+  return 0
+}
+
 ensure_run_user_groups() {
   local run_user="$1"
 
@@ -160,6 +209,7 @@ ensure_system_services() {
 
   ensure_bluezero_dbus_policy
   ensure_bluez_experimental
+  ensure_bluez_auto_enable
 
   systemctl enable dbus.service 2>/dev/null || true
   systemctl start dbus.service 2>/dev/null || true
@@ -171,6 +221,7 @@ ensure_system_services() {
     systemctl enable bluetooth.service
     systemctl start bluetooth.service
     log_info "Bluetooth (bluez) activado"
+    ensure_bluetooth_powered || true
   else
     log_warn "Servicio bluetooth.service no encontrado"
   fi
@@ -278,6 +329,8 @@ install_host_dependencies() {
     log_info "SKIP_HOST_DEPS=true — omitiendo instalación de paquetes del host"
     ensure_run_user_groups "${run_user}"
     ensure_bluez_experimental
+    ensure_bluez_auto_enable
+    ensure_bluetooth_powered || true
     verify_host_ready
     return 0
   fi

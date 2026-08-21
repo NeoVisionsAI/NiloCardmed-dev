@@ -281,6 +281,10 @@ start_stack() {
   fi
 
   log_info "Arrancando contenedor..."
+  if is_true "${ENABLE_BLUETOOTH:-false}"; then
+    bash "${INSTALL_DIR}/scripts/ensure-bluetooth-powered.sh" || \
+      log_warn "Bluetooth host no encendido — GATT puede fallar (Not Powered)"
+  fi
   compose_cmd up -d --remove-orphans
 
   sleep 3
