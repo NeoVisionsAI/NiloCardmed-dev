@@ -8,7 +8,6 @@ import shutil
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 
 from nilocardmed.bluetooth.exceptions import BluetoothBackendError, BluetoothConfigError
 from nilocardmed.bluetooth.framing import BleTransport
@@ -171,25 +170,6 @@ class BluezBluetoothBackend(BluetoothBackend):
             logger.debug("No se pudo comprobar LE advertising: %s", exc)
         return True
 
-    @staticmethod
-    def _wait_registration_event(
-        ready: threading.Event,
-        failed: threading.Event,
-        stop_check: Callable[[], bool],
-        *,
-        timeout: float = 20.0,
-    ) -> bool:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if ready.is_set():
-                return True
-            if failed.is_set():
-                return False
-            if stop_check():
-                return False
-            time.sleep(0.05)
-        return False
-
     def _purge_stale_advertisement(self, ble) -> None:
         try:
             ble.ad_manager.unregister_advertisement(ble.advert)
@@ -224,31 +204,39 @@ class BluezBluetoothBackend(BluetoothBackend):
         self._purge_stale_advertisement(ble)
         purge_stale_bluez_registrations(getattr(ble.dongle, "address", None))
 
-        gatt_ready = threading.Event()
-        gatt_failed = threading.Event()
-        advert_ready = threading.Event()
-        advert_failed = threading.Event()
         failure_messages: list[str] = []
 
         def _on_gatt_ok() -> None:
             logger.info("GATT application registered")
-            gatt_ready.set()
+            self._gatt_registered.set()
 
         def _on_gatt_err(error) -> None:
             message = f"Failed to register GATT application: {error}"
             failure_messages.append(message)
             logger.error(message)
-            gatt_failed.set()
+            try:
+                ble.mainloop.quit()
+            except Exception:
+                pass
 
         def _on_advert_ok() -> None:
             logger.info("BLE advertisement registrado")
-            advert_ready.set()
+            self._advert_registered.set()
+            if self._gatt_registered.is_set():
+                from nilocardmed.operations_log import trace_system
+
+                trace_system(
+                    event="bluetooth_activo",
+                    detail="GATT y advertisement publicados",
+                    device_name=self.settings.device_name,
+                    adapter=ble.dongle.address,
+                )
+                logger.info("GATT BLE registrado y publicando (GATT + advertisement OK)")
 
         def _on_advert_err(error) -> None:
             message = f"Failed to register advertisement: {error}"
             failure_messages.append(message)
             logger.error(message)
-            advert_failed.set()
             try:
                 ble.mainloop.quit()
             except Exception:
@@ -261,15 +249,6 @@ class BluezBluetoothBackend(BluetoothBackend):
             error_handler=_on_gatt_err,
         )
 
-        if not self._wait_registration_event(
-            gatt_ready,
-            gatt_failed,
-            lambda: self._should_stop(shutdown),
-            timeout=20.0,
-        ):
-            detail = failure_messages[-1] if failure_messages else "timeout registrando GATT"
-            raise BluetoothBackendError(detail)
-
         ble.ad_manager.advert_mngr_methods.RegisterAdvertisement(
             ble.advert.get_path(),
             dbus.Dictionary({}, signature="sv"),
@@ -277,33 +256,14 @@ class BluezBluetoothBackend(BluetoothBackend):
             error_handler=_on_advert_err,
         )
 
-        if not self._wait_registration_event(
-            advert_ready,
-            advert_failed,
-            lambda: self._should_stop(shutdown),
-            timeout=20.0,
-        ):
-            self._shutdown_peripheral(ble)
-            detail = failure_messages[-1] if failure_messages else "timeout registrando advertisement"
-            raise BluetoothBackendError(detail)
-
-        self._gatt_registered.set()
-        self._advert_registered.set()
-        from nilocardmed.operations_log import trace_system
-
-        trace_system(
-            event="bluetooth_activo",
-            detail="GATT y advertisement publicados",
-            device_name=self.settings.device_name,
-            adapter=ble.dongle.address,
-        )
-        logger.info("GATT BLE registrado y publicando (GATT + advertisement OK)")
-
         try:
             ble.mainloop.run()
         finally:
             self._gatt_registered.clear()
             self._advert_registered.clear()
+
+        if failure_messages and not self._should_stop(shutdown):
+            raise BluetoothBackendError(failure_messages[-1])
 
     @staticmethod
     def _shutdown_peripheral(ble) -> None:
