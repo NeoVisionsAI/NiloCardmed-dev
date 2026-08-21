@@ -231,6 +231,10 @@ def select_backend(settings: BluetoothSettings, router: CommandRouter) -> Blueto
         if shutil.which("bluetoothctl") or os.path.exists("/var/run/dbus/system_bus_socket"):
             try:
                 import dbus  # noqa: F401
+                import gi
+
+                gi.require_version("GLib", "2.0")
+                from gi.repository import GLib  # noqa: F401
                 import bluezero  # noqa: F401
 
                 logger.debug("Backend Bluetooth auto -> bluez")

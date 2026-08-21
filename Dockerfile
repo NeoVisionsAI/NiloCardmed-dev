@@ -16,6 +16,7 @@ ENV PYTHONUNBUFFERED=1 \
     NILOCARDMED_DATA_DIR=${DATA_DIR} \
     NILOCARDMED_LOG_DIR=${LOG_DIR}
 
+# Runtime apt (permanecen en la imagen)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         tini \
@@ -40,38 +41,45 @@ RUN groupadd --gid "${APP_GID}" "${APP_USER}" \
 WORKDIR ${APP_HOME}
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/install-ble-deps.sh /tmp/install-ble-deps.sh
 COPY pyproject.toml requirements.txt README.md ./
 
-# Capa cacheada: dependencias pip (lenta en ARM). Solo se reconstruye si cambian requirements/pyproject.
+# Capa cacheada: compilación ARM (Pillow, dbus-python, PyGObject, bluezero).
+# CI: docker build -f docker/Dockerfile.ble-deps-test .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    apt-get update \
+    chmod +x /tmp/install-ble-deps.sh \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         gcc \
         python3-dev \
         pkg-config \
+        meson \
+        ninja-build \
         zlib1g-dev \
         libjpeg62-turbo-dev \
         libpng-dev \
         libdbus-1-dev \
         libglib2.0-dev \
         libgirepository1.0-dev \
-    && grep -Ev '^(bluezero|PyGObject|#)' requirements.txt > /tmp/requirements-no-ble.txt \
-    && pip install -r /tmp/requirements-no-ble.txt \
-    && pip install "PyGObject>=3.42,<4" \
-    && pip install --no-deps "bluezero>=0.7,<1" \
+        gobject-introspection \
+    && grep -Ev '^(bluezero|PyGObject|dbus-python|#)' requirements.txt > /tmp/requirements-core.txt \
+    && pip install -r /tmp/requirements-core.txt \
+    && /tmp/install-ble-deps.sh \
     && apt-get purge -y --auto-remove \
         gcc \
         python3-dev \
         pkg-config \
+        meson \
+        ninja-build \
         zlib1g-dev \
         libjpeg62-turbo-dev \
         libpng-dev \
         libdbus-1-dev \
         libglib2.0-dev \
         libgirepository1.0-dev \
+        gobject-introspection \
     && rm -rf /var/lib/apt/lists/*
 
-# Capa rápida: solo código de la app (cambios frecuentes).
 COPY nilocardmed ./nilocardmed
 
 RUN --mount=type=cache,target=/root/.cache/pip \

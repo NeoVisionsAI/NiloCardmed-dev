@@ -21,6 +21,9 @@ jobs:
       - name: Run tests
         run: pytest -q
 
+      - name: Validar deps BLE Docker (bookworm / sin pycairo)
+        run: docker build -f docker/Dockerfile.ble-deps-test .
+
       - name: Smoke CLI
         run: |
           NILOCARDMED_DATA_DIR=/tmp/nilocardmed-ci \
