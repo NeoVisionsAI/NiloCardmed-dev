@@ -43,3 +43,11 @@ def test_environment_settings_accepts_comma_separated_int_lists(monkeypatch):
 
     assert env.ser.success_status_codes == [200, 201, 202, 204]
     assert env.ser.retry_on_status_codes == [408, 429, 500, 502, 503, 504]
+
+
+def test_environment_settings_accepts_plain_string_str_list(monkeypatch):
+    monkeypatch.setenv("NILOCARDMED_BLUETOOTH__ALLOWED_COMMANDS_WITHOUT_AUTH", "auth")
+
+    env = EnvironmentSettings()
+
+    assert env.bluetooth.allowed_commands_without_auth == ["auth"]

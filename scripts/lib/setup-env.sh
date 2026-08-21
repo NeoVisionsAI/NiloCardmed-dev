@@ -208,6 +208,46 @@ migrate_deploy_service_name_var() {
   fi
 }
 
+# Imágenes sin NoDecode (pydantic) requieren listas en JSON en .env
+normalize_env_list_values() {
+  local env_file="$1"
+  local val json_val item
+
+  val="$(read_env_value "${env_file}" "NILOCARDMED_SER__SUCCESS_STATUS_CODES" || true)"
+  if [[ -n "${val}" && "${val}" != \[* ]]; then
+    json_val="[$(echo "${val}" | sed 's/ //g')]"
+    update_env_file "${env_file}" "NILOCARDMED_SER__SUCCESS_STATUS_CODES" "${json_val}"
+    log_info ".env: SUCCESS_STATUS_CODES → formato JSON"
+  fi
+
+  val="$(read_env_value "${env_file}" "NILOCARDMED_SER__RETRY_ON_STATUS_CODES" || true)"
+  if [[ -n "${val}" && "${val}" != \[* ]]; then
+    json_val="[$(echo "${val}" | sed 's/ //g')]"
+    update_env_file "${env_file}" "NILOCARDMED_SER__RETRY_ON_STATUS_CODES" "${json_val}"
+    log_info ".env: RETRY_ON_STATUS_CODES → formato JSON"
+  fi
+
+  val="$(read_env_value "${env_file}" "NILOCARDMED_BLUETOOTH__ALLOWED_COMMANDS_WITHOUT_AUTH" || true)"
+  if [[ -n "${val}" && "${val}" != \[* ]]; then
+    json_val="["
+    local first=true
+    IFS=',' read -ra parts <<< "${val}"
+    for item in "${parts[@]}"; do
+      item="${item// /}"
+      [[ -z "${item}" ]] && continue
+      if [[ "${first}" == true ]]; then
+        json_val+="\"${item}\""
+        first=false
+      else
+        json_val+=",\"${item}\""
+      fi
+    done
+    json_val+="]"
+    update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__ALLOWED_COMMANDS_WITHOUT_AUTH" "${json_val}"
+    log_info ".env: ALLOWED_COMMANDS_WITHOUT_AUTH → formato JSON"
+  fi
+}
+
 sync_compose_file_env() {
   local install_dir="$1"
   local deploy_file="${install_dir}/deploy.env"
@@ -275,6 +315,7 @@ setup_deploy_and_app_env() {
   update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__PASSWORD" "${BLUETOOTH_PASSWORD}"
   update_env_file "${env_file}" "NILOCARDMED_SER__DEVICE_ID" "${DEVICE_UUID}"
   ensure_app_production_flags "${env_file}"
+  normalize_env_list_values "${env_file}"
 
   log_info "Configuración aplicada:"
   log_info "  device_id (SER)=${DEVICE_UUID}"
