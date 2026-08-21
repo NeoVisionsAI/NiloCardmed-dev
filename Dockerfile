@@ -12,7 +12,6 @@ ARG LOG_DIR=/var/log/nilocardmed
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     NILOCARDMED_DATA_DIR=${DATA_DIR} \
     NILOCARDMED_LOG_DIR=${LOG_DIR}
@@ -40,10 +39,10 @@ WORKDIR ${APP_HOME}
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY pyproject.toml requirements.txt README.md ./
-COPY nilocardmed ./nilocardmed
 
-# Pillow y dbus-python compilan en ARM; bluezero --no-deps (sin PyGObject/pycairo).
-RUN apt-get update \
+# Capa cacheada: dependencias pip (lenta en ARM). Solo se reconstruye si cambian requirements/pyproject.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    apt-get update \
     && apt-get install -y --no-install-recommends \
         gcc \
         python3-dev \
@@ -53,11 +52,9 @@ RUN apt-get update \
         libpng-dev \
         libdbus-1-dev \
         libglib2.0-dev \
-        libglib2.0-0 \
-        libdbus-1-3 \
-    && pip install --no-cache-dir . \
-    && pip install --no-cache-dir "dbus-python>=1.2,<3" \
-    && pip install --no-cache-dir --no-deps "bluezero>=0.7,<1" \
+    && grep -Ev '^(bluezero|#)' requirements.txt > /tmp/requirements-no-bluezero.txt \
+    && pip install -r /tmp/requirements-no-bluezero.txt \
+    && pip install --no-deps "bluezero>=0.7,<1" \
     && apt-get purge -y --auto-remove \
         gcc \
         python3-dev \
@@ -68,6 +65,12 @@ RUN apt-get update \
         libdbus-1-dev \
         libglib2.0-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Capa rápida: solo código de la app (cambios frecuentes).
+COPY nilocardmed ./nilocardmed
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-deps --no-cache-dir .
 
 RUN chmod +x /usr/local/bin/entrypoint.sh \
     && mkdir -p "${DATA_DIR}" "${LOG_DIR}" \

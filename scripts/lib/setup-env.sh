@@ -187,6 +187,24 @@ ensure_deploy_production_flags() {
   log_info "deploy.env: flags de producción aplicados (WiFi, BLE, hot-plug cámara)"
 }
 
+sync_compose_file_env() {
+  local install_dir="$1"
+  local deploy_file="${install_dir}/deploy.env"
+  local override_file="${install_dir}/docker-compose.override.yml"
+  local base="${COMPOSE_FILE:-docker-compose.yml:docker-compose.pi.yml}"
+
+  base="${base//:docker-compose.override.yml/}"
+  base="${base//docker-compose.override.yml:/}"
+  base="${base//docker-compose.override.yml/}"
+
+  if [[ -f "${override_file}" ]]; then
+    update_env_file "${deploy_file}" "COMPOSE_FILE" "${base}:docker-compose.override.yml"
+    log_info "deploy.env: COMPOSE_FILE incluye docker-compose.override.yml (systemd + BLE/WiFi)"
+  else
+    update_env_file "${deploy_file}" "COMPOSE_FILE" "${base}"
+  fi
+}
+
 setup_deploy_and_app_env() {
   local install_dir="$1"
   local deploy_example="${install_dir}/deploy.env.example"
@@ -214,6 +232,9 @@ setup_deploy_and_app_env() {
   set -a && source "${deploy_file}" && set +a
   sync_deploy_run_user "${deploy_file}"
   ensure_deploy_production_flags "${deploy_file}"
+  # shellcheck disable=SC1090
+  set -a && source "${deploy_file}" && set +a
+  sync_compose_file_env "${install_dir}"
   # shellcheck disable=SC1090
   set -a && source "${deploy_file}" && set +a
   local data_dir="${HOST_DATA_DIR:-/var/lib/nilocardmed/data}"

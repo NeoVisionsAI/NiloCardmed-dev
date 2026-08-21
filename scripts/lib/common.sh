@@ -195,7 +195,8 @@ compose_cmd() {
   for f in "${files[@]}"; do
     cmd+=( -f "${INSTALL_DIR}/${f}" )
   done
-  if [[ -f "${INSTALL_DIR}/docker-compose.override.yml" ]]; then
+  if [[ -f "${INSTALL_DIR}/docker-compose.override.yml" ]] \
+    && [[ "${COMPOSE_FILE}" != *docker-compose.override.yml* ]]; then
     cmd+=( -f "${INSTALL_DIR}/docker-compose.override.yml" )
   fi
   "${cmd[@]}" "$@"

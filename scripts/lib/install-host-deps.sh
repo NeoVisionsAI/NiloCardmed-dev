@@ -206,7 +206,7 @@ verify_service_and_container() {
   for attempt in $(seq 1 45); do
     if systemctl is-failed --quiet "${service}.service"; then
       log_error "Servicio ${service} en estado failed"
-      journalctl -u "${service}.service" -n 40 --no-pager || true
+      show_compose_startup_diagnostics
       return 1
     fi
     if systemctl is-active --quiet "${service}.service"; then
@@ -217,7 +217,7 @@ verify_service_and_container() {
 
   if ! systemctl is-active --quiet "${service}.service"; then
     log_error "Servicio ${service} no arrancó a tiempo"
-    journalctl -u "${service}.service" -n 40 --no-pager || true
+    show_compose_startup_diagnostics
     return 1
   fi
 
@@ -233,9 +233,30 @@ verify_service_and_container() {
   fi
 
   log_error "El contenedor no está en ejecución"
-  journalctl -u "${service}.service" -n 40 --no-pager || true
-  run_compose_in_install_dir ps 2>/dev/null || true
+  show_compose_startup_diagnostics
   return 1
+}
+
+show_compose_startup_diagnostics() {
+  local service="${NILOCARDMED_SERVICE_NAME:-nilocardmed}"
+
+  log_error "=== Diagnóstico (journal + compose) ==="
+  journalctl -u "${service}.service" -n 60 --no-pager 2>/dev/null || true
+  log_info "COMPOSE_FILE=${COMPOSE_FILE:-?}"
+  if [[ -n "${INSTALL_DIR:-}" && -d "${INSTALL_DIR}" ]]; then
+    (
+      cd "${INSTALL_DIR}"
+      export COMPOSE_PROJECT_NAME COMPOSE_FILE
+      # shellcheck disable=SC1090
+      set -a && source "${DEPLOY_ENV_FILE:-${INSTALL_DIR}/deploy.env}" && set +a
+      log_info "--- docker compose config ---"
+      ${DOCKER_COMPOSE_CMD} config 2>&1 | tail -30 || true
+      log_info "--- docker compose ps -a ---"
+      run_compose_in_install_dir ps -a 2>&1 || true
+      log_info "--- logs contenedor (últimas 40 líneas) ---"
+      run_compose_in_install_dir logs --tail=40 nilocardmed 2>&1 || true
+    )
+  fi
 }
 
 install_host_dependencies() {

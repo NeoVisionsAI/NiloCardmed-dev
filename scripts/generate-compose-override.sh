@@ -108,8 +108,14 @@ fi
 if [[ "$(wc -l < "${tmp_file}")" -le 3 ]]; then
   log_info "Sin overrides de hardware; omitiendo ${override_file}"
   rm -f "${override_file}" "${tmp_file}"
+  # shellcheck source=lib/setup-env.sh
+  source "${SCRIPT_DIR}/lib/setup-env.sh"
+  sync_compose_file_env "${INSTALL_DIR}"
   exit 0
 fi
 
 mv "${tmp_file}" "${override_file}"
 log_info "Override generado correctamente"
+# shellcheck source=lib/setup-env.sh
+source "${SCRIPT_DIR}/lib/setup-env.sh"
+sync_compose_file_env "${INSTALL_DIR}"

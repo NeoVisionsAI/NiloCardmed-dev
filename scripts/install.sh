@@ -21,9 +21,11 @@ export REPO_ROOT
 source "${SCRIPT_DIR}/lib/common.sh"
 
 SKIP_HOST_DEPS=false
+SKIP_BUILD=false
 for arg in "$@"; do
   case "${arg}" in
     --skip-host-deps) SKIP_HOST_DEPS=true ;;
+    --skip-build) SKIP_BUILD=true ;;
     -h | --help)
       cat <<'EOF'
 Uso: sudo ./scripts/install.sh [opciones]
@@ -37,17 +39,24 @@ Instalación completa para fábrica (repetible en N dispositivos):
 
 Opciones:
   --skip-host-deps   Omitir apt/Docker (solo aplicación)
+  --skip-build       No reconstruir imagen (usa la existente; ideal tras cambios de código)
   -h, --help         Esta ayuda
 
 Variables:
   INSTALL_DIR              Directorio destino (default: NILOCARDMED_INSTALL_DIR)
   SKIP_HOST_DEPS=true      Igual que --skip-host-deps
+  SKIP_BUILD=true          Igual que --skip-build
+
+Iteración rápida en Pi:
+  sudo ./scripts/update.sh              # ~segundos (solo código + restart)
+  sudo ./scripts/update.sh --build      # rebuild con caché Docker (~1-3 min si solo cambió código)
 EOF
       exit 0
       ;;
   esac
 done
 export SKIP_HOST_DEPS
+export SKIP_BUILD
 
 if [[ "${EUID}" -ne 0 ]]; then
   log_error "Ejecuta este script como root (sudo)."
@@ -95,24 +104,36 @@ ensure_host_directories
 # --- 6. Compose override (hot-plug cámara, BLE, WiFi) ---
 INSTALL_DIR="${INSTALL_DIR}" DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE}" \
   bash "${INSTALL_DIR}/scripts/generate-compose-override.sh"
+load_deploy_env
 
-# --- 7. Build imagen ---
-log_info "=== Build Docker (plataforma: ${DOCKER_DEFAULT_PLATFORM:-linux/arm/v7}) ==="
-log_info "En Pi Zero la primera build puede tardar 15-30 minutos..."
-(
-  cd "${INSTALL_DIR}"
-  export COMPOSE_PROJECT_NAME COMPOSE_FILE
-  # shellcheck disable=SC1090
-  set -a && source "${DEPLOY_ENV_FILE}" && set +a
-  ${DOCKER_COMPOSE_CMD} build \
-    --build-arg PYTHON_IMAGE="${PYTHON_IMAGE:-python:3.11-slim-bookworm}" \
-    --build-arg APP_USER="${APP_USER:-nilocardmed}" \
-    --build-arg APP_UID="${APP_UID:-1000}" \
-    --build-arg APP_GID="${APP_GID:-1000}" \
-    --build-arg APP_HOME="${APP_HOME:-/app}" \
-    --build-arg DATA_DIR="${CONTAINER_DATA_DIR:-/data}" \
-    --build-arg LOG_DIR="${CONTAINER_LOG_DIR:-/var/log/nilocardmed}"
-)
+# --- 7. Build imagen (opcional; capas cacheadas entre builds) ---
+if is_true "${SKIP_BUILD:-false}"; then
+  log_info "=== Build Docker omitido (--skip-build) ==="
+  if ! docker image inspect "${COMPOSE_PROJECT_NAME:-nilocardmed}_nilocardmed:latest" >/dev/null 2>&1 \
+    && ! docker image inspect nilocardmed:latest >/dev/null 2>&1 \
+    && ! docker images --format '{{.Repository}}' | grep -qx nilocardmed; then
+    log_warn "No hay imagen nilocardmed local; el arranque puede fallar hasta un build."
+    log_warn "Ejecuta: sudo ./scripts/install.sh --skip-host-deps  (o update.sh --build)"
+  fi
+else
+  log_info "=== Build Docker (plataforma: ${DOCKER_DEFAULT_PLATFORM:-linux/arm/v7}) ==="
+  log_info "Primera build ~15-30 min; cambios solo de código ~1-3 min (caché de capas pip)."
+  export DOCKER_BUILDKIT=1
+  (
+    cd "${INSTALL_DIR}"
+    export COMPOSE_PROJECT_NAME COMPOSE_FILE
+    # shellcheck disable=SC1090
+    set -a && source "${DEPLOY_ENV_FILE}" && set +a
+    ${DOCKER_COMPOSE_CMD} build \
+      --build-arg PYTHON_IMAGE="${PYTHON_IMAGE:-python:3.11-slim-bookworm}" \
+      --build-arg APP_USER="${APP_USER:-nilocardmed}" \
+      --build-arg APP_UID="${APP_UID:-1000}" \
+      --build-arg APP_GID="${APP_GID:-1000}" \
+      --build-arg APP_HOME="${APP_HOME:-/app}" \
+      --build-arg DATA_DIR="${CONTAINER_DATA_DIR:-/data}" \
+      --build-arg LOG_DIR="${CONTAINER_LOG_DIR:-/var/log/nilocardmed}"
+  )
+fi
 
 # --- 8. systemd ---
 service_path="/etc/systemd/system/${NILOCARDMED_SERVICE_NAME}.service"
