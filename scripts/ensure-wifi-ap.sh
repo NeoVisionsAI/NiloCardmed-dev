@@ -71,6 +71,8 @@ Wants=network-online.target
 Type=simple
 Environment=INSTALL_DIR=${INSTALL_DIR}
 EnvironmentFile=-${INSTALL_DIR}/deploy.env
+StandardOutput=journal
+StandardError=journal
 ExecStartPre=${INSTALL_DIR}/scripts/wifi-ap-run.sh stop
 ExecStart=${INSTALL_DIR}/scripts/wifi-ap-run.sh run
 ExecStop=${INSTALL_DIR}/scripts/wifi-ap-run.sh stop

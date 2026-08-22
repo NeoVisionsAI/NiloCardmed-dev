@@ -149,8 +149,8 @@ configure_ap_address() {
   ip link set "${AP_INTERFACE}" down 2>/dev/null || true
   ip addr flush dev "${AP_INTERFACE}" 2>/dev/null || true
   ip addr add "${AP_IP}/${AP_CIDR}" dev "${AP_INTERFACE}"
-  # No hacer 'ip link set up' aquí: hostapd debe activar el enlace en brcmfmac.
-  # UP + NO-CARRIER antes de hostapd es normal; sin hostapd el SSID no aparece.
+  ip link set "${AP_INTERFACE}" up
+  # NO-CARRIER hasta que hostapd emita beacons es normal en brcmfmac.
 }
 
 write_hostapd_conf() {
@@ -297,7 +297,7 @@ write_hostapd_config_with_fallback() {
   validate_hostapd_conf
 }
 
-prepare_ap() {
+prepare_ap_core() {
   load_deploy_env
   mkdir -p "${RUN_DIR}" "${LOG_DIR}"
 
@@ -329,26 +329,67 @@ prepare_ap() {
     log_error "hostapd.conf inválido — log: ${LOG_DIR}/hostapd-test.log"
     return 1
   }
-  start_dnsmasq || return 1
 
-  log "AP preparado: SSID=${ssid} IP=${AP_IP} (${AP_INTERFACE}) canal=${channel} WPA2"
+  log "AP configurado: SSID=${ssid} IP=${AP_IP} (${AP_INTERFACE}) canal=${channel} WPA2"
   return 0
 }
 
+start_ap_services() {
+  stop_hostapd
+  start_hostapd_background || return 1
+  start_dnsmasq || {
+    stop_hostapd
+    return 1
+  }
+  return 0
+}
+
+prepare_ap() {
+  prepare_ap_core || return 1
+  start_ap_services || return 1
+  log "AP preparado (hostapd + dnsmasq activos)"
+  return 0
+}
+
+monitor_hostapd_foreground() {
+  local hp_pid="$1"
+  trap 'stop_dnsmasq; stop_hostapd; exit 143' TERM INT
+  while kill -0 "${hp_pid}" 2>/dev/null; do
+    sleep 5
+  done
+  log_error "hostapd (pid ${hp_pid}) terminó — revisa ${LOG_DIR}/hostapd.log"
+  stop_dnsmasq
+  return 1
+}
+
 run_ap_foreground() {
-  prepare_ap || exit 1
   local conf="${CONFIG_DIR}/hostapd.conf"
-  log "hostapd en primer plano — systemd reiniciará si el AP cae"
-  exec hostapd -P "${RUN_DIR}/hostapd.pid" "${conf}"
+  local hp_pid=""
+
+  prepare_ap_core || exit 1
+
+  if ! hostapd -B -P "${RUN_DIR}/hostapd.pid" "${conf}" >>"${LOG_DIR}/hostapd.log" 2>&1; then
+    log_error "hostapd no arrancó — log: ${LOG_DIR}/hostapd.log"
+    tail -10 "${LOG_DIR}/hostapd.log" >&2 || true
+    exit 1
+  fi
+  verify_ap_active || exit 1
+
+  start_dnsmasq || {
+    stop_hostapd
+    exit 1
+  }
+
+  hp_pid="$(cat "${RUN_DIR}/hostapd.pid")"
+  log "Supervisando hostapd pid ${hp_pid} (systemd reinicia si cae)"
+  monitor_hostapd_foreground "${hp_pid}"
+  exit 1
 }
 
 start_ap() {
   stop_hostapd
+  stop_dnsmasq
   prepare_ap || exit 1
-  start_hostapd_background || {
-    log_error "hostapd no arrancó — log: ${LOG_DIR}/hostapd.log"
-    exit 1
-  }
   log "AP activo (background)"
 }
 

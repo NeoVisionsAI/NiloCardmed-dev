@@ -597,8 +597,16 @@ restart_wifi_ap_if_enabled() {
 
   if systemctl list-unit-files nilocardmed-wifi-ap.service >/dev/null 2>&1; then
     log_info "Reiniciando AP WiFi (aplica WPA / hostapd)..."
-    run_with_timeout 90 systemctl restart nilocardmed-wifi-ap.service \
-      || log_warn "nilocardmed-wifi-ap no reinició a tiempo — prueba: sudo systemctl restart nilocardmed-wifi-ap"
+    if ! run_with_timeout 90 systemctl restart nilocardmed-wifi-ap.service; then
+      log_warn "nilocardmed-wifi-ap falló al reiniciar — diagnóstico:"
+      local ap_script="${install_dir}/scripts/wifi-ap-run.sh"
+      if [[ -f "${ap_script}" ]]; then
+        INSTALL_DIR="${install_dir}" bash "${ap_script}" diagnose 2>&1 || true
+      fi
+      journalctl -u nilocardmed-wifi-ap -n 20 --no-pager 2>/dev/null || true
+      log_warn "Prueba: sudo systemctl restart nilocardmed-wifi-ap"
+      log_warn "Logs: /var/log/nilocardmed/wifi-ap/hostapd.log"
+    fi
   fi
 }
 
