@@ -351,6 +351,9 @@ install_host_dependencies() {
   if is_true "${SKIP_HOST_DEPS:-false}"; then
     log_info "SKIP_HOST_DEPS=true — omitiendo instalación de paquetes del host"
     ensure_run_user_groups "${run_user}"
+    if resolve_wifi_ap_enabled; then
+      ensure_wifi_ap_packages || true
+    fi
     if resolve_bluetooth_enabled; then
       ensure_bluez_experimental
       ensure_bluez_auto_enable

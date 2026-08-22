@@ -23,6 +23,8 @@ if ! resolve_wifi_ap_enabled; then
   exit 0
 fi
 
+ensure_wifi_ap_packages
+
 require_command iw
 require_command hostapd
 require_command dnsmasq

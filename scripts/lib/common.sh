@@ -40,6 +40,35 @@ resolve_wifi_ap_enabled() {
   is_true "${ENABLE_WIFI_AP:-false}"
 }
 
+# hostapd/dnsmasq/iw — también en update.sh (--skip-host-deps no instala el resto de apt).
+ensure_wifi_ap_packages() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    return 0
+  fi
+  if ! command -v apt-get >/dev/null 2>&1; then
+    log_warn "apt-get no disponible — instala a mano: hostapd dnsmasq iw"
+    return 1
+  fi
+
+  local need_install=false
+  for cmd_pkg in "hostapd:hostapd" "dnsmasq:dnsmasq" "iw:iw"; do
+    local cmd="${cmd_pkg%%:*}"
+    local pkg="${cmd_pkg#*:}"
+    if ! command -v "${cmd}" >/dev/null 2>&1; then
+      need_install=true
+      log_info "Falta ${cmd} — se instalará paquete ${pkg}"
+    fi
+  done
+
+  if [[ "${need_install}" != true ]]; then
+    return 0
+  fi
+
+  log_info "=== Paquetes WiFi AP (hostapd, dnsmasq, iw) ==="
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq hostapd dnsmasq iw
+}
+
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     log_error "Comando requerido no encontrado: $1"
@@ -502,16 +531,48 @@ ensure_bluetooth_disabled_for_wifi_ap() {
 
   log_info "=== Bluetooth off (modo WiFi AP activo — ahorro RAM/CPU) ==="
 
+  if [[ -f /etc/bluetooth/main.conf ]]; then
+    if grep -qE '^AutoEnable\s*=' /etc/bluetooth/main.conf 2>/dev/null; then
+      sed -i 's/^AutoEnable\s*=.*/AutoEnable=false/' /etc/bluetooth/main.conf
+    elif grep -qE '^\[General\]' /etc/bluetooth/main.conf 2>/dev/null; then
+      sed -i '/^\[General\]/a AutoEnable=false' /etc/bluetooth/main.conf
+    fi
+    log_info "BlueZ: AutoEnable=false (evita reencendido automático)"
+  fi
+
   if systemctl list-unit-files bluetooth.service >/dev/null 2>&1; then
     systemctl stop bluetooth.service 2>/dev/null || true
     systemctl disable bluetooth.service 2>/dev/null || true
+    systemctl mask bluetooth.service 2>/dev/null || true
   fi
+
+  for unit in blueman-mechanism.service blueman-applet.service; do
+    if systemctl list-unit-files "${unit}" >/dev/null 2>&1; then
+      systemctl stop "${unit}" 2>/dev/null || true
+      systemctl disable "${unit}" 2>/dev/null || true
+    fi
+  done
 
   if command -v rfkill >/dev/null 2>&1; then
     rfkill block bluetooth 2>/dev/null || true
+    while read -r idx _; do
+      [[ -n "${idx}" ]] || continue
+      rfkill block "${idx}" 2>/dev/null || true
+    done < <(rfkill list 2>/dev/null | grep -i bluetooth -B1 | grep '^[0-9]' | awk -F: '{print $1}')
   fi
 
   if command -v bluetoothctl >/dev/null 2>&1; then
     bluetoothctl power off 2>/dev/null || true
   fi
+
+  if command -v hciconfig >/dev/null 2>&1; then
+    hciconfig hci0 down 2>/dev/null || true
+  fi
+
+  if command -v btmgmt >/dev/null 2>&1; then
+    btmgmt power off 2>/dev/null || true
+  fi
+
+  log_info "Bluetooth: servicio enmascarado, rfkill block, adaptador apagado"
+  log_info "Nota: el icono del panel puede tardar en actualizarse; comprueba con: rfkill list bluetooth"
 }
