@@ -22,6 +22,7 @@ def test_supervisor_restarts_unhealthy_bluetooth():
     bluetooth_service = MagicMock()
     bluetooth_service.is_healthy.side_effect = [False, True]
     bluetooth_service.has_active_client.return_value = False
+    bluetooth_service.is_publish_alive.return_value = False
 
     shutdown = threading.Event()
     supervisor = BluetoothSupervisor(config_manager, bluetooth_service)
@@ -109,6 +110,7 @@ def test_supervisor_skips_restart_with_active_client():
     bluetooth_service = MagicMock()
     bluetooth_service.is_healthy.return_value = False
     bluetooth_service.has_active_client.return_value = True
+    bluetooth_service.is_publish_alive.return_value = True
 
     shutdown = threading.Event()
 

@@ -69,7 +69,15 @@ class BluetoothSupervisor:
 
             if resilience.bluetooth_supervisor_enabled:
                 if not self._bluetooth_service.is_healthy():
-                    if self._bluetooth_service.has_active_client():
+                    publish_alive = self._bluetooth_service.is_publish_alive()
+                    if publish_alive and not self._bluetooth_service.has_active_client():
+                        self._bluetooth_service.request_advertising_refresh()
+                        time.sleep(2.0)
+                        if self._bluetooth_service.is_healthy():
+                            if shutdown.wait(timeout=float(interval)):
+                                break
+                            continue
+                    if self._bluetooth_service.has_active_client() and publish_alive:
                         logger.debug("BLE con cliente activo; omitiendo reinicio automático")
                     else:
                         self._maybe_restart(shutdown, resilience.bluetooth_restart_cooldown_seconds)

@@ -109,6 +109,22 @@ class BluetoothService:
         """Alias retrocompatible."""
         self.ensure_adapter_visibility()
 
+    def request_advertising_refresh(self) -> bool:
+        if self._backend is None:
+            return False
+        refresh = getattr(self._backend, "request_advertising_refresh", None)
+        if callable(refresh):
+            return bool(refresh())
+        return False
+
+    def is_publish_alive(self) -> bool:
+        if self._backend is None:
+            return False
+        checker = getattr(self._backend, "is_publish_alive", None)
+        if callable(checker):
+            return bool(checker())
+        return False
+
     def is_healthy(self) -> bool:
         if not self.settings.enabled:
             return True

@@ -31,6 +31,7 @@ RUN apt-get update \
         libdbus-1-3 \
         libgirepository-1.0-1 \
         gir1.2-glib-2.0 \
+        network-manager \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid "${APP_GID}" "${APP_USER}" \

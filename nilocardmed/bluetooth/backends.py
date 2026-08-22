@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import shutil
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 
 from nilocardmed.bluetooth.exceptions import BluetoothBackendError, BluetoothConfigError
 from nilocardmed.bluetooth.framing import BleTransport
@@ -89,6 +91,12 @@ class BluezBluetoothBackend(BluetoothBackend):
         self._master_shutdown: threading.Event | None = None
         self._started_at: float | None = None
         self._lifecycle_lock = threading.Lock()
+        self._command_queue: queue.Queue[bytes | None] = queue.Queue()
+        self._command_worker: threading.Thread | None = None
+        self._command_worker_stop = threading.Event()
+        self._mainloop_tx_queue: queue.Queue[list[bytes]] = queue.Queue()
+        self._mainloop_tx_idle_active = False
+        self._mainloop_action_queue: queue.Queue[Callable[[], None]] = queue.Queue()
 
     def start(self, shutdown: threading.Event) -> None:
         with self._lifecycle_lock:
@@ -135,21 +143,146 @@ class BluezBluetoothBackend(BluetoothBackend):
             self._advert_registered.clear()
             self._started_at = None
             self._local_stop.clear()
+            self._stop_command_worker()
+
+    def _start_command_worker(self, shutdown: threading.Event) -> None:
+        if self._command_worker and self._command_worker.is_alive():
+            return
+
+        self._command_worker_stop.clear()
+
+        def _worker() -> None:
+            while not self._command_worker_stop.is_set():
+                try:
+                    payload = self._command_queue.get(timeout=0.3)
+                except queue.Empty:
+                    if self._should_stop(shutdown):
+                        break
+                    continue
+                if payload is None:
+                    break
+                try:
+                    self._process_command_write(payload)
+                except Exception:
+                    logger.exception("Error procesando comando BLE")
+
+        self._command_worker = threading.Thread(
+            target=_worker,
+            name="ble-command-worker",
+            daemon=True,
+        )
+        self._command_worker.start()
+
+    def _stop_command_worker(self) -> None:
+        self._command_worker_stop.set()
+        try:
+            self._command_queue.put_nowait(None)
+        except queue.Full:
+            pass
+        if self._command_worker and self._command_worker.is_alive():
+            self._command_worker.join(timeout=30)
+        self._command_worker = None
+        while True:
+            try:
+                self._command_queue.get_nowait()
+            except queue.Empty:
+                break
+
+    def _process_command_write(self, data: bytes) -> None:
+        frames = self.process_frames(data)
+        if not frames:
+            return
+
+        try:
+            self._last_response = bytearray(self._transport.full_response_from_frames(frames))
+        except Exception:
+            self._last_response = bytearray(frames[-1])
+
+        if self._tx_characteristic is None:
+            return
+
+        self._schedule_tx_delivery(frames)
+
+    def _schedule_tx_delivery(self, frames: list[bytes]) -> None:
+        self._mainloop_tx_queue.put(frames)
+        if self._mainloop_tx_idle_active:
+            return
+        self._mainloop_tx_idle_active = True
+        try:
+            import gi
+
+            gi.require_version("GLib", "2.0")
+            from gi.repository import GLib
+
+            GLib.idle_add(self._drain_mainloop_tx_queue)
+        except Exception as exc:
+            logger.warning("Entrega BLE vía idle_add falló (%s); entrega directa", exc)
+            self._mainloop_tx_idle_active = False
+            self._deliver_response_frames(frames)
+
+    def _drain_mainloop_tx_queue(self) -> bool:
+        try:
+            frames = self._mainloop_tx_queue.get_nowait()
+        except queue.Empty:
+            self._mainloop_tx_idle_active = False
+            return False
+
+        self._deliver_response_frames(frames)
+        if self._mainloop_tx_queue.empty():
+            self._mainloop_tx_idle_active = False
+            return False
+        return True
+
+    def _deliver_response_frames(self, frames: list[bytes]) -> bool:
+        if self._tx_characteristic is None:
+            return False
+
+        delay_s = self.settings.ble_inter_frame_delay_ms / 1000.0
+        for index, frame in enumerate(frames):
+            self._tx_characteristic.set_value(list(frame))
+            self._emit_notify()
+            if index + 1 < len(frames) and delay_s > 0:
+                time.sleep(delay_s)
+        return False
 
     def has_active_client(self) -> bool:
         return self._tx_characteristic is not None
 
+    def is_publish_alive(self) -> bool:
+        return self._publish_thread is not None and self._publish_thread.is_alive()
+
+    def request_advertising_refresh(self) -> bool:
+        """Pide re-registrar LE advertising en el hilo del mainloop GLib."""
+        if not self.is_publish_alive():
+            return False
+        self._mainloop_action_queue.put(self._refresh_le_advertising)
+        try:
+            import gi
+
+            gi.require_version("GLib", "2.0")
+            from gi.repository import GLib
+
+            GLib.idle_add(self._run_pending_mainloop_actions_once)
+        except Exception as exc:
+            logger.debug("No se pudo programar refresh LE en mainloop: %s", exc)
+        return True
+
+    def _run_pending_mainloop_actions_once(self) -> bool:
+        self._run_pending_mainloop_actions()
+        return False
+
     def is_healthy(self) -> bool:
         if self._thread is None or not self._thread.is_alive():
             return False
-        if self._publish_thread is not None and not self._publish_thread.is_alive():
+        if not self.is_publish_alive():
             return False
-        if self.has_active_client():
-            return True
         if not self._gatt_registered.is_set() or not self._advert_registered.is_set():
             if self._started_at is not None and time.monotonic() - self._started_at < 45.0:
                 return True
             return False
+        if self.has_active_client():
+            return True
+
         try:
             from nilocardmed.bluetooth.advertising_status import read_le_advertising_state
 
@@ -301,9 +434,35 @@ class BluezBluetoothBackend(BluetoothBackend):
             error_handler=_on_gatt_err,
         )
 
+        self._start_command_worker(shutdown)
+
+        import gi
+
+        gi.require_version("GLib", "2.0")
+        from gi.repository import GLib
+
+        def _periodic_ble_maintenance() -> bool:
+            if self._should_stop(shutdown):
+                return False
+            self._run_pending_mainloop_actions()
+            if not self.has_active_client() and self._advert_registered.is_set():
+                from nilocardmed.bluetooth.advertising_status import read_le_advertising_state
+
+                le_state = read_le_advertising_state(timeout=2.0)
+                if not le_state.get("le_advertising_active"):
+                    logger.warning(
+                        "Watchdog BLE: anuncio LE inactivo (ActiveInstances=%s); re-registrando",
+                        le_state.get("active_instances"),
+                    )
+                    _register_advertisement()
+            return True
+
+        GLib.timeout_add_seconds(15, _periodic_ble_maintenance)
+
         try:
             ble.mainloop.run()
         finally:
+            self._stop_command_worker()
             self._gatt_registered.clear()
             self._advert_registered.clear()
 
@@ -349,6 +508,49 @@ class BluezBluetoothBackend(BluetoothBackend):
             logger.debug("remove advertisement: %s", exc)
 
         time.sleep(0.5)
+
+    def _run_pending_mainloop_actions(self) -> None:
+        while True:
+            try:
+                action = self._mainloop_action_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                action()
+            except Exception:
+                logger.exception("Acción mainloop BLE fallida")
+
+    def _refresh_le_advertising(self) -> None:
+        ble = self._peripheral
+        if ble is None or self.has_active_client():
+            return
+
+        from nilocardmed.bluetooth.advertising_status import (
+            purge_stale_bluez_registrations,
+            read_le_advertising_state,
+        )
+
+        le_state = read_le_advertising_state(timeout=2.0)
+        if le_state.get("le_advertising_active"):
+            return
+
+        logger.warning(
+            "Restaurando anuncio LE (ActiveInstances=%s)",
+            le_state.get("active_instances"),
+        )
+        self._purge_stale_advertisement(ble)
+        purge_stale_bluez_registrations(
+            getattr(ble.dongle, "address", None),
+            aggressive=True,
+        )
+        import dbus
+
+        ble.ad_manager.advert_mngr_methods.RegisterAdvertisement(
+            ble.advert.get_path(),
+            dbus.Dictionary({}, signature="sv"),
+            reply_handler=lambda: logger.info("LE advertisement restaurado"),
+            error_handler=lambda err: logger.error("Restore advertisement failed: %s", err),
+        )
 
     def _run_peripheral(self, shutdown: threading.Event) -> None:
         try:
@@ -399,6 +601,16 @@ class BluezBluetoothBackend(BluetoothBackend):
             appearance=self.settings.appearance,
         )
         self._peripheral = ble
+
+        def _handle_disconnect(*_args) -> None:
+            self._tx_characteristic = None
+            logger.info("Cliente BLE desconectado (adaptador)")
+            trace_ble_client(event="desconectado", detail="desconexión del adaptador")
+
+        try:
+            ble.on_disconnect = _handle_disconnect
+        except Exception as exc:
+            logger.debug("on_disconnect no disponible: %s", exc)
 
         ble.add_service(srv_id=1, uuid=self.settings.service_uuid, primary=True)
         ble.add_characteristic(
@@ -468,24 +680,10 @@ class BluezBluetoothBackend(BluetoothBackend):
         return adapters[0]
 
     def _on_write(self, value, _options) -> None:
-        frames = self.process_frames(bytes(value))
-        if not frames:
-            return
-
         try:
-            self._last_response = bytearray(self._transport.full_response_from_frames(frames))
-        except Exception:
-            self._last_response = bytearray(frames[-1])
-
-        if self._tx_characteristic is None:
-            return
-
-        delay_s = self.settings.ble_inter_frame_delay_ms / 1000.0
-        for index, frame in enumerate(frames):
-            self._tx_characteristic.set_value(list(frame))
-            self._emit_notify()
-            if index + 1 < len(frames) and delay_s > 0:
-                time.sleep(delay_s)
+            self._command_queue.put_nowait(bytes(value))
+        except queue.Full:
+            logger.warning("Cola de comandos BLE llena; descartando write")
 
     def _emit_notify(self) -> None:
         characteristic = self._tx_characteristic
