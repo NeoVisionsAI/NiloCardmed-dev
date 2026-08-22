@@ -7,6 +7,7 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
+from nilocardmed.bluetooth.backends import BLE_STARTUP_GRACE_SECONDS
 from nilocardmed.config.manager import ConfigManager
 from nilocardmed.operations_log import trace_system
 from nilocardmed.telemetry.store import telemetry
@@ -30,6 +31,7 @@ class BluetoothSupervisor:
         self._thread: threading.Thread | None = None
         self._last_restart = 0.0
         self._restart_count = 0
+        self._skip_startup_grace = False
 
     @property
     def restart_count(self) -> int:
@@ -54,6 +56,19 @@ class BluetoothSupervisor:
 
     def run(self, shutdown: threading.Event) -> None:
         logger.info("Supervisor Bluetooth iniciado")
+        startup_grace = max(
+            BLE_STARTUP_GRACE_SECONDS,
+            float(
+                self._config_manager.get().resilience.bluetooth_health_check_interval_seconds
+            ),
+        )
+        logger.info(
+            "Supervisor BLE: esperando %.0fs antes del primer chequeo (registro GATT)",
+            startup_grace,
+        )
+        if not self._skip_startup_grace and shutdown.wait(timeout=startup_grace):
+            return
+
         while not shutdown.is_set():
             config = self._config_manager.get()
             resilience = config.resilience

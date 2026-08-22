@@ -132,14 +132,48 @@ disable_hdmi_blanking() {
 }
 
 remove_lightdm_xserver_dropin() {
-  # NO usar xserver-command en lightdm: rompe X11 en Raspberry Pi OS (pantalla negra).
+  # NO usar xserver-command en lightdm: rompe X11 en Raspberry Pi OS (pantalla negra / solo ratón).
   # DPMS se controla con xset en autostart (disable_x_dpms) y raspi-config.
   local dropin_dir="/etc/lightdm/lightdm.conf.d"
-  local dropin_file="${dropin_dir}/nilocardmed-no-blanking.conf"
-  if [[ -f "${dropin_file}" ]]; then
-    mv "${dropin_file}" "${dropin_file}.disabled"
-    log_info "lightdm: eliminado dropin obsoleto ${dropin_file} (evita pantalla negra)"
+  local changed=false
+  local path
+
+  [[ -d "${dropin_dir}" ]] || return 0
+
+  shopt -s nullglob
+  for path in \
+    "${dropin_dir}/nilocardmed-no-blanking.conf" \
+    "${dropin_dir}/nilocardmed-no-blanking.conf.bak" \
+    "${dropin_dir}"/nilocardmed-no-blanking.conf.*; do
+    [[ -f "${path}" ]] || continue
+    [[ "${path}" == *.disabled ]] && continue
+    mv "${path}" "${path}.disabled"
+    log_info "lightdm: dropin obsoleto desactivado: ${path}"
+    changed=true
+  done
+  shopt -u nullglob
+
+  # Cualquier dropin nuestro antiguo con xserver-command=X
+  while IFS= read -r -d '' path; do
+    if grep -qE '^[[:space:]]*xserver-command=X' "${path}" 2>/dev/null; then
+      mv "${path}" "${path}.disabled"
+      log_info "lightdm: desactivado ${path} (xserver-command rompe el escritorio)"
+      changed=true
+    fi
+  done < <(find "${dropin_dir}" -maxdepth 1 -type f -name '*.conf' -print0 2>/dev/null)
+
+  if [[ "${changed}" == true ]]; then
+    RESTORE_LIGHTDM_AFTER=1
   fi
+}
+
+restore_lightdm_session_if_needed() {
+  [[ "${RESTORE_LIGHTDM_AFTER:-0}" == 1 ]] || [[ "${NILOCARDMED_RESTORE_DESKTOP_AFTER:-}" == "always" ]] || return 0
+  if ! systemctl is-active lightdm >/dev/null 2>&1; then
+    return 0
+  fi
+  log_info "lightdm: reiniciando sesión gráfica (restaurar escritorio tras install/update)…"
+  systemctl restart lightdm || log_warn "No se pudo reiniciar lightdm"
 }
 
 disable_desktop_power_management() {
@@ -203,19 +237,24 @@ main() {
     exit 1
   fi
 
+  RESTORE_LIGHTDM_AFTER=0
+
   log_info "=== Host always-on (sin suspender / blanking / pantalla negra) ==="
+  remove_lightdm_xserver_dropin
   write_logind_dropin
   mask_sleep_targets
   disable_console_blank
   disable_hdmi_blanking
   disable_raspi_screen_blanking
-  remove_lightdm_xserver_dropin
   disable_x_dpms
   disable_desktop_power_management
   ensure_kernel_consoleblank
   apply_active_tty_blanking_off
+  remove_lightdm_xserver_dropin
+  restore_lightdm_session_if_needed
 
-  systemctl restart systemd-logind 2>/dev/null || true
+  # No reiniciar systemd-logind con lightdm activo: tumba la sesión X (pantalla negra / solo ratón).
+  log_info "systemd-logind: dropin aplicado (efecto completo tras reboot; no se reinicia en caliente)"
   log_info "Pantalla/consola: sin blanking (equiv. raspi-config Screen Blanking > No)"
   log_info "Reinicio recomendado tras el primer install para hdmi_blanking/consoleblank"
 }

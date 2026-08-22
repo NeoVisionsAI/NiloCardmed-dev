@@ -82,7 +82,15 @@ class BluetoothService:
         with self._restart_lock:
             logger.info("Reiniciando servicio Bluetooth")
             self._stop_backend()
-            time.sleep(2.0)
+            time.sleep(3.0)
+            try:
+                from nilocardmed.bluetooth.advertising_status import purge_stale_bluez_registrations
+                from nilocardmed.bluetooth.backends import BluezBluetoothBackend
+
+                purge_stale_bluez_registrations(self._adapter_address(), aggressive=True)
+                BluezBluetoothBackend._release_bluezero_dbus_paths()
+            except Exception as exc:
+                logger.debug("Limpieza pre-restart BLE: %s", exc)
             self.ensure_adapter_visibility()
             self._backend = None
             self.start(master)

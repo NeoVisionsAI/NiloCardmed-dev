@@ -37,7 +37,7 @@ Comandos:
   status    Estado del contenedor y salud
   stop      docker compose down (usa deploy.env, proyecto nilocardmed)
   logs      docker compose logs -f --tail=100
-  trace     Traza operativa BLE/WiFi (filtrada). Ver también: trace-full
+  trace     Traza operativa BLE/WiFi (modo ligero, cada 2s). Ver trace --follow
   trace-full  Todos los logs del contenedor (sin filtro grep)
   ble-recover  Recupera BLE tras emparejamiento huérfano / sin anuncio (requiere sudo)
   deploy    Alias de update.sh: código + Bluetooth host + rebuild opcional + restart
@@ -362,13 +362,23 @@ cmd_trace() {
   cd "${INSTALL_DIR}"
   export COMPOSE_PROJECT_NAME COMPOSE_FILE
   log_info "Traza operativa (Ctrl+C para salir)"
+  log_info "Pi Zero 2 W: NO ejecutes trace en la consola gráfica local (satura RAM)."
+  log_info "Usa SSH desde otro equipo. Modo ligero: sin docker logs -f."
   log_info "Si no ves wifi_scan: el comando no llegó al contenedor (timeout BLE / app)"
   if [[ "${mode}" == "--full" ]]; then
     cmd_trace_full
     return
   fi
-  compose_cmd logs -f --tail=80 2>&1 | grep --line-buffered -iE \
-    'nilocardmed\.trace|comando BLE|cliente BLE|wifi_scan|wifi_connect|wifi_scan_ok|wifi_scan_error|Escaneando redes|\[ble\]|\[wifi\]|\[config\]|\[system\]|invalid_password|wifi_error|bluetooth_activo|autenticación|auth '
+  if [[ "${mode}" == "--follow" ]]; then
+    compose_cmd logs -f --tail=30 2>&1 | grep --line-buffered -iE \
+      'nilocardmed\.trace|comando BLE|cliente BLE|wifi_scan|wifi_connect|wifi_scan_ok|wifi_scan_error|Escaneando redes|\[ble\]|\[wifi\]|\[config\]|\[system\]|invalid_password|wifi_error|bluetooth_activo|autenticación|auth '
+    return
+  fi
+  local pattern='nilocardmed\.trace|comando BLE|cliente BLE|wifi_scan|wifi_connect|wifi_scan_ok|wifi_scan_error|Escaneando redes|\[ble\]|\[wifi\]|\[config\]|\[system\]|invalid_password|wifi_error|bluetooth_activo|autenticación|auth '
+  while true; do
+    compose_cmd logs --tail=25 2>&1 | grep -iE "${pattern}" || true
+    sleep 2
+  done
 }
 
 cmd_trace_full() {

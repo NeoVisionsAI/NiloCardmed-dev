@@ -38,6 +38,7 @@ def test_supervisor_restarts_unhealthy_bluetooth():
 
     shutdown.wait = wait_once  # type: ignore[method-assign]
     supervisor._last_restart = 0.0
+    supervisor._skip_startup_grace = True
 
     supervisor.run(shutdown)
 
@@ -69,6 +70,7 @@ def test_supervisor_keeps_discoverable_without_gatt_restart():
     shutdown.wait = stop_after_one  # type: ignore[method-assign]
 
     supervisor = BluetoothSupervisor(config_manager, bluetooth_service)
+    supervisor._skip_startup_grace = True
     supervisor.run(shutdown)
 
     bluetooth_service.ensure_adapter_visibility.assert_called()
@@ -98,6 +100,7 @@ def test_supervisor_skips_when_disabled():
     shutdown.wait = stop_after_one  # type: ignore[method-assign]
 
     supervisor = BluetoothSupervisor(config_manager, bluetooth_service)
+    supervisor._skip_startup_grace = True
     supervisor.run(shutdown)
 
     bluetooth_service.restart.assert_not_called()
@@ -122,6 +125,7 @@ def test_supervisor_skips_restart_with_active_client():
     shutdown.wait = stop_after_one  # type: ignore[method-assign]
 
     supervisor = BluetoothSupervisor(config_manager, bluetooth_service)
+    supervisor._skip_startup_grace = True
     supervisor.run(shutdown)
 
     bluetooth_service.restart.assert_not_called()

@@ -19,6 +19,10 @@ from nilocardmed.operations_log import trace_ble_client
 
 logger = logging.getLogger(__name__)
 
+# Tiempo de gracia tras start()/restart antes de considerar BLE "no saludable".
+BLE_STARTUP_GRACE_SECONDS = 60.0
+BLUEZERO_DBUS_ROOT = "/ukBaz/bluezero"
+
 # AD legacy 31 bytes: flags (~3) + Complete Local Name (2 + utf8). Sin UUID ni Appearance.
 MAX_LE_AD_LOCAL_NAME_BYTES = 24
 
@@ -107,9 +111,12 @@ class BluezBluetoothBackend(BluetoothBackend):
             if self._thread and self._thread.is_alive():
                 return
 
+            self._wait_for_previous_thread_exit()
+
             self._local_stop.clear()
             self._gatt_registered.clear()
             self._advert_registered.clear()
+            self._gatt_client_connected = False
             self._started_at = time.monotonic()
             self._master_shutdown = shutdown
 
@@ -138,16 +145,19 @@ class BluezBluetoothBackend(BluetoothBackend):
             if self._publish_thread and self._publish_thread.is_alive():
                 self._publish_thread.join(timeout=15)
             if self._thread and self._thread.is_alive():
-                self._thread.join(timeout=15)
+                self._thread.join(timeout=20)
             self._thread = None
             self._publish_thread = None
             self._tx_characteristic = None
             self._peripheral = None
+            self._gatt_client_connected = False
             self._gatt_registered.clear()
             self._advert_registered.clear()
             self._started_at = None
             self._local_stop.clear()
             self._stop_command_worker()
+            self._release_bluezero_dbus_paths()
+            time.sleep(0.5)
 
     def _start_command_worker(self, shutdown: threading.Event) -> None:
         if self._command_worker and self._command_worker.is_alive():
@@ -259,16 +269,19 @@ class BluezBluetoothBackend(BluetoothBackend):
         return False
 
     def is_healthy(self) -> bool:
+        if self._started_at is not None:
+            elapsed = time.monotonic() - self._started_at
+            if elapsed < BLE_STARTUP_GRACE_SECONDS:
+                if self._gatt_registered.is_set() and self._advert_registered.is_set():
+                    return True
+                if self._thread is not None and self._thread.is_alive():
+                    return True
         if self._thread is None or not self._thread.is_alive():
             return False
         if not self.is_publish_alive():
             return False
         if not self._gatt_registered.is_set() or not self._advert_registered.is_set():
-            if self._started_at is not None and time.monotonic() - self._started_at < 45.0:
-                return True
             return False
-        # GATT + anuncio registrados en BlueZ: confiar en el registro. bluetoothctl
-        # desde el contenedor suele reportar ActiveInstances=0 con anuncio activo.
         return True
 
     def _prepare_le_advertisement(self, ble, *, recreate: bool = False) -> None:
@@ -557,6 +570,30 @@ class BluezBluetoothBackend(BluetoothBackend):
 
         time.sleep(0.5)
 
+    @staticmethod
+    def _release_bluezero_dbus_paths() -> None:
+        """Libera rutas D-Bus de bluezero tras stop/restart (evita KeyError ukBaz/bluezero)."""
+        try:
+            import dbus
+        except ImportError:
+            return
+        try:
+            bus = dbus.SystemBus()
+            for path in (BLUEZERO_DBUS_ROOT, f"{BLUEZERO_DBUS_ROOT}/service0000"):
+                try:
+                    bus.remove_object_path(path)
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.debug("release bluezero dbus paths: %s", exc)
+
+    def _wait_for_previous_thread_exit(self) -> None:
+        if self._thread and self._thread.is_alive():
+            self._local_stop.set()
+            self._thread.join(timeout=20)
+        self._thread = None
+        self._release_bluezero_dbus_paths()
+
     def _run_pending_mainloop_actions(self) -> None:
         while True:
             try:
@@ -637,6 +674,9 @@ class BluezBluetoothBackend(BluetoothBackend):
         if removed:
             logger.info("Limpieza BlueZ: %s registro(s) huérfano(s) eliminado(s)", removed)
             time.sleep(1.0)
+
+        self._release_bluezero_dbus_paths()
+        time.sleep(0.3)
 
         ble = peripheral.Peripheral(
             adapter_address,

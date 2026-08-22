@@ -167,6 +167,9 @@ if ! verify_service_and_container; then
   exit 1
 fi
 
+log_info "=== Restaurar escritorio tras build (lightdm) ==="
+NILOCARDMED_RESTORE_DESKTOP_AFTER=always ensure_host_always_on "${INSTALL_DIR}"
+
 log_info ""
 log_info "=== Instalación completada ==="
 log_info "Directorio:  ${INSTALL_DIR}"
