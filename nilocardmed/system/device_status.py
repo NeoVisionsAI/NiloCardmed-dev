@@ -94,16 +94,6 @@ def build_device_status(ctx: CommandContext) -> dict[str, Any]:
     config = ctx.config_manager.get()
     wifi_service = WifiService(config.wifi, config_manager=ctx.config_manager)
 
-    wifi: dict[str, Any]
-    try:
-        wifi = wifi_service.status(check_connectivity=True).to_dict()
-    except WifiError as exc:
-        wifi = {
-            "connected": False,
-            "ssid": config.wifi.ssid,
-            "error": str(exc),
-        }
-
     window = evaluate_window(config.sampling)
     sampling = {
         "enabled": config.sampling.enabled,
@@ -111,8 +101,17 @@ def build_device_status(ctx: CommandContext) -> dict[str, Any]:
         "monitor_start": config.sampling.monitor_start,
         "monitor_end": config.sampling.monitor_end,
         "window_active": window.active,
-        "window_reason": window.reason,
+        "window_phase": window.phase.value,
     }
+
+    try:
+        wifi = wifi_service.status(check_connectivity=False).to_dict()
+    except WifiError as exc:
+        wifi = {
+            "connected": False,
+            "ssid": config.wifi.ssid,
+            "error": str(exc),
+        }
 
     return {
         "device_name": config.bluetooth.device_name,

@@ -46,6 +46,7 @@ def test_nmcli_scan_rescans_when_disconnected():
             "GENERAL.STATE:30 (disconnected)\nGENERAL.CONNECTION:--\n",
             "",
             "Guest:50:WPA2:bb:2437:no\n",
+            "Guest:50:WPA2:bb:2437:no\n",
             "GENERAL.STATE:30 (disconnected)\nGENERAL.CONNECTION:--\n",
         ]
         result = backend.scan(rescan=False)

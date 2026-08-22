@@ -277,7 +277,11 @@ def handle_sampling_set_window(ctx: CommandContext, request: CommandRequest) -> 
 def handle_wifi_scan(ctx: CommandContext, request: CommandRequest) -> dict[str, Any]:
     config = ctx.config_manager.get()
     service = WifiService(config.wifi, config_manager=ctx.config_manager)
-    rescan = bool(request.payload.get("rescan", False))
+    rescan = request.payload.get("rescan")
+    if rescan is None:
+        rescan = True
+    else:
+        rescan = bool(rescan)
     try:
         result = service.scan(rescan=rescan)
     except WifiError as exc:

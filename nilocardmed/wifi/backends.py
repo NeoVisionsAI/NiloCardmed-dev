@@ -126,7 +126,10 @@ class HostScriptBackend(WifiBackend):
             raise WifiBackendError(f"Salida JSON inválida del script WiFi: {output[:200]}") from exc
 
     def scan(self, *, rescan: bool = False) -> WifiScanResult:
-        payload = self._run("scan")
+        payload = self._run(
+            "scan",
+            extra_env={"WIFI_FORCE_RESCAN": "1" if rescan else "0"},
+        )
         networks = [_network_from_dict(item) for item in payload.get("networks", [])]
         return WifiScanResult(
             networks=networks,
@@ -295,6 +298,21 @@ class NmcliBackend(WifiBackend):
             self.settings.interface,
         )
         networks = _parse_nmcli_wifi_list(output)
+
+        if len(networks) <= 1:
+            output_all = self._run_nmcli(
+                "-t",
+                "-f",
+                "SSID,SIGNAL,SECURITY,BSSID,FREQ,IN-USE",
+                "dev",
+                "wifi",
+                "list",
+                timeout=10,
+            )
+            networks_all = _parse_nmcli_wifi_list(output_all)
+            if len(networks_all) > len(networks):
+                networks = networks_all
+                scan_mode = f"{scan_mode}+nmcli_all"
 
         restored = False
         if snapshot:

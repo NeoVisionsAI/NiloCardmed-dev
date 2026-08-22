@@ -41,6 +41,10 @@ Tarjetas visuales con botón **Refrescar** (re-fetch del panel).
 | Última config guardada | `config_last_saved_at` (ISO8601 UTC) |
 | Imágenes tomadas | `captures.cycles_successful` (+ opcional `captures.images_on_disk`) |
 
+**Refrescar estado:** `GET http://192.168.4.1:8080/api/dashboard` (sin auth).  
+La tablet **debe estar en el AP** del Pi; no usar la URL HTTPS de la plataforma.  
+Si falla: comprobar `GET /api/status` primero; timeout recomendado 10 s.
+
 **Presentación batería (backend ya normaliza):**
 
 | `power.power_source` | UI sugerida |
@@ -52,9 +56,10 @@ Tarjetas visuales con botón **Refrescar** (re-fetch del panel).
 
 ### 2.3 Pestaña **WiFi**
 
-- Escaneo: `wifi_scan`
+- Escaneo: `wifi_scan` con `{ "rescan": true }` (default backend)
 - Conectar: `wifi_connect` con `{ ssid, password, persist: true }`
 - Layout más compacto: SSID, contraseña y botón en fila o grid, no inputs full-width apilados
+- Si solo sale la red activa: esperar 3–5 s; backend reintenta con `iw scan` en Pi AP+STA
 
 ### 2.4 Pestaña **Cámara** (nueva)
 

@@ -206,7 +206,19 @@ class ProvisioningHttpHandler(BaseHTTPRequestHandler):
         if path == "/api/dashboard":
             from nilocardmed.system.device_status import build_device_status
 
-            dashboard = build_device_status(self.router.context)
+            try:
+                dashboard = build_device_status(self.router.context)
+            except Exception as exc:  # noqa: BLE001 — respuesta JSON al frontend
+                logger.exception("Error construyendo /api/dashboard")
+                self._send_json(
+                    500,
+                    {
+                        "status": "error",
+                        "error": "dashboard_failed",
+                        "detail": str(exc),
+                    },
+                )
+                return
             self._send_json(200, dashboard)
             return
         self._send_json(404, {"status": "error", "error": "not_found"})
