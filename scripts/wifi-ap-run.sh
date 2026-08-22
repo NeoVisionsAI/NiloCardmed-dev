@@ -177,9 +177,15 @@ ensure_ap_interface() {
 }
 
 assign_ap_ip() {
-  reset_ap_link
-  ip addr add "${AP_IP}/${AP_CIDR}" dev "${AP_INTERFACE}"
+  if ! ip addr show dev "${AP_INTERFACE}" 2>/dev/null | grep -qE "inet ${AP_IP}/"; then
+    ip addr add "${AP_IP}/${AP_CIDR}" dev "${AP_INTERFACE}" 2>/dev/null || true
+  fi
   ip link set "${AP_INTERFACE}" up 2>/dev/null || true
+}
+
+prepare_ap_link() {
+  reset_ap_link
+  assign_ap_ip
 }
 
 # Config mínima probada en brcmfmac (Pi Zero 2 W). País vía iw reg, no en hostapd.conf.
@@ -217,7 +223,6 @@ lines = [
     "wpa=2",
     "wpa_key_mgmt=WPA-PSK",
     f"wpa_passphrase={password}",
-    "wpa_pairwise=TKIP CCMP",
     "rsn_pairwise=CCMP",
 ]
 if ieee11n == "1":
@@ -233,14 +238,14 @@ write_dnsmasq_conf() {
   local conf="${CONFIG_DIR}/dnsmasq.conf"
   cat >"${conf}" <<EOF
 interface=${AP_INTERFACE}
-bind-interfaces
-except-interface=lo
+bind-dynamic
 listen-address=${AP_IP}
 port=0
 dhcp-authoritative
+log-dhcp
 dhcp-range=192.168.4.10,192.168.4.50,255.255.255.0,12h
-dhcp-option=3,${AP_IP}
-dhcp-option=6,${AP_IP}
+dhcp-option=option:router,${AP_IP}
+dhcp-option=option:dns-server,${AP_IP}
 no-hosts
 no-resolv
 log-facility=${LOG_DIR}/dnsmasq.log
@@ -285,11 +290,17 @@ stop_hostapd() {
 
 start_dnsmasq() {
   stop_dnsmasq
+  assign_ap_ip
   dnsmasq -C "${CONFIG_DIR}/dnsmasq.conf" -x "${RUN_DIR}/dnsmasq.pid" \
     >>"${LOG_DIR}/dnsmasq-start.log" 2>&1 || {
     log_error "dnsmasq falló: $(tail -5 "${LOG_DIR}/dnsmasq-start.log" | tr '\n' ' ')"
     return 1
   }
+  if ss -ulnp 2>/dev/null | grep -q ":67.*dnsmasq"; then
+    log "dnsmasq escuchando DHCP en ${AP_IP}:67"
+  else
+    log_warn "dnsmasq arrancó pero no se ve puerto 67 UDP — revisa ${LOG_DIR}/dnsmasq-start.log"
+  fi
 }
 
 # hostapd -t falla en brcmfmac con uap0; probamos arranque real con reintentos.
@@ -299,7 +310,7 @@ start_hostapd_with_fallback() {
   local password="$3"
   local ieee11n conf="${CONFIG_DIR}/hostapd.conf"
 
-  reset_ap_link
+  prepare_ap_link
 
   for ieee11n in 0 1; do
     stop_hostapd
@@ -312,7 +323,7 @@ start_hostapd_with_fallback() {
     fi
     log_warn "hostapd ieee80211n=${ieee11n} falló: $(tail -6 "${LOG_DIR}/hostapd.log" 2>/dev/null | tr '\n' ' ')"
     stop_hostapd
-    reset_ap_link
+    prepare_ap_link
   done
 
   log_error "hostapd no pudo inicializar ${AP_INTERFACE}"
@@ -446,6 +457,8 @@ diagnose_ap() {
   systemctl status nilocardmed-wifi-ap --no-pager 2>/dev/null || true
   status_ap
   [[ -f "${LOG_DIR}/hostapd.log" ]] && tail -20 "${LOG_DIR}/hostapd.log" || log_warn "Sin ${LOG_DIR}/hostapd.log"
+  [[ -f "${LOG_DIR}/dnsmasq.log" ]] && tail -10 "${LOG_DIR}/dnsmasq.log" || true
+  ss -ulnp 2>/dev/null | grep -E ':67|:53' || log_warn "Sin dnsmasq en UDP 67 (DHCP)"
   [[ -f "${LOG_DIR}/iw-add.err" ]] && cat "${LOG_DIR}/iw-add.err" || true
 }
 
