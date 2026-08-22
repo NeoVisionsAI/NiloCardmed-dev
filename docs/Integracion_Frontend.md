@@ -88,7 +88,7 @@ En casi todos los casos el Pi está anunciando correctamente (`GATT + advertisem
 | No aplica filtros de la app | Requiere **gesto del usuario** (tap en botón) |
 | Ve el nombre aunque no lleve UUID en el AD | Si filtras mal, **no aparece en el picker** |
 
-El NiloCardmed anuncia **solo el nombre local** (`NiloCardmed-<uuid>`) en el paquete de advertising (límite 31 bytes de BLE). **No incluye el UUID de servicio en el AD.** Por tanto:
+El NiloCardmed publica en el paquete de advertising (AD) **solo el Complete Local Name** (`NiloCardmed-<uuid>`, tipo AD 0x09). **No incluye el UUID de servicio en el AD** (límite 31 bytes). El firmware fuerza `LocalName` en cada registro de anuncio LE y sincroniza el alias BlueZ con el mismo valor.
 
 | Filtro en la app | ¿Aparece en el picker? |
 |------------------|------------------------|
@@ -147,6 +147,17 @@ bluetoothctl show | grep -iE 'Powered|Discoverable|Advertising|ActiveInstances|A
 ```
 
 El `Alias` debe ser `NiloCardmed-<uuid>` (ej. `NiloCardmed-d212bd98`).
+
+#### Criterio de aceptación (backend + PWA)
+
+| Comprobación | Esperado |
+|--------------|----------|
+| nRF Connect → Advertising data | Campo **Complete Local Name** = `NiloCardmed-<uuid>` |
+| Chrome Android → `requestDevice({ filters: [{ namePrefix: 'NiloCardmed' }] })` | Diálogo muestra **nombre legible**, no «dispositivo desconocido» |
+| Tras conectar y desconectar | El nombre sigue en ADV (anuncio restaurado con el mismo `LocalName`) |
+| `device.name` en JS (antes de GATT) | `NiloCardmed-<uuid>` |
+
+Logs del Pi (`Anuncio LE: LocalName='NiloCardmed-…'` + `bluetooth_activo`) confirman la configuración; no sustituyen la prueba con Chrome.
 
 ---
 

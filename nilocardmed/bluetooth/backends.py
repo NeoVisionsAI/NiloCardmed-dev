@@ -19,6 +19,9 @@ from nilocardmed.operations_log import trace_ble_client
 
 logger = logging.getLogger(__name__)
 
+# AD legacy 31 bytes: flags (~3) + Complete Local Name (2 + utf8). Sin UUID ni Appearance.
+MAX_LE_AD_LOCAL_NAME_BYTES = 24
+
 
 class BluetoothBackend(ABC):
     """Interfaz para publicar el servicio GATT."""
@@ -96,6 +99,7 @@ class BluezBluetoothBackend(BluetoothBackend):
         self._command_worker_stop = threading.Event()
         self._mainloop_tx_queue: queue.Queue[list[bytes]] = queue.Queue()
         self._mainloop_action_queue: queue.Queue[Callable[[], None]] = queue.Queue()
+        self._last_le_advert_refresh_at: float = 0.0
 
     def start(self, shutdown: threading.Event) -> None:
         with self._lifecycle_lock:
@@ -261,27 +265,8 @@ class BluezBluetoothBackend(BluetoothBackend):
             if self._started_at is not None and time.monotonic() - self._started_at < 45.0:
                 return True
             return False
-        if self.has_active_client():
-            return True
-
-        try:
-            from nilocardmed.bluetooth.advertising_status import read_le_advertising_state
-
-            le_state = read_le_advertising_state()
-            if le_state.get("advertising") is False:
-                logger.warning(
-                    "GATT registrado pero LE Advertising=no (ActiveInstances=%s)",
-                    le_state.get("active_instances"),
-                )
-                return False
-            if le_state.get("advertising") is None and not le_state.get("le_advertising_active"):
-                logger.warning(
-                    "GATT registrado pero sin instancias LE activas (ActiveInstances=%s)",
-                    le_state.get("active_instances"),
-                )
-                return False
-        except Exception as exc:
-            logger.debug("No se pudo comprobar LE advertising: %s", exc)
+        # GATT + anuncio registrados en BlueZ: confiar en el registro. bluetoothctl
+        # desde el contenedor suele reportar ActiveInstances=0 con anuncio activo.
         return True
 
     def _prepare_le_advertisement(self, ble, *, recreate: bool = False) -> None:
@@ -301,8 +286,40 @@ class BluezBluetoothBackend(BluetoothBackend):
             except Exception as exc:
                 logger.debug("remove advert antes de recrear: %s", exc)
             ble._create_advertisement()
-            self._trim_advertisement_for_legacy_adv(ble)
+        self._configure_le_advertisement(ble, self.settings.device_name)
         time.sleep(0.5)
+
+    @staticmethod
+    def _configure_le_advertisement(ble, local_name: str) -> None:
+        """Fuerza Complete Local Name (AD type 0x09) para Web Bluetooth namePrefix."""
+        from bluezero import constants
+
+        name = (local_name or "").strip()
+        if not name:
+            raise BluetoothBackendError(
+                "device_name vacío: Web Bluetooth requiere LocalName en el anuncio LE"
+            )
+        encoded_len = len(name.encode("utf-8"))
+        if encoded_len > MAX_LE_AD_LOCAL_NAME_BYTES:
+            logger.warning(
+                "LocalName BLE largo (%s bytes); puede no caber en AD legacy de 31 bytes",
+                encoded_len,
+            )
+
+        ble.advert.service_UUIDs = []
+        try:
+            ble.advert.props[constants.LE_ADVERTISEMENT_IFACE]["Appearance"] = None
+        except Exception as exc:
+            logger.debug("Anuncio: no se pudo omitir Appearance: %s", exc)
+        try:
+            ble.advert.include_tx_power = False
+        except Exception as exc:
+            logger.debug("Anuncio: no se pudo omitir tx-power: %s", exc)
+        ble.advert.local_name = name
+        logger.info(
+            "Anuncio LE: LocalName=%r (Complete Local Name para Web Bluetooth)",
+            name,
+        )
 
     def _register_le_advertisement(
         self,
@@ -361,21 +378,6 @@ class BluezBluetoothBackend(BluetoothBackend):
         except Exception as exc:
             logger.debug("purge remove advert: %s", exc)
 
-    @staticmethod
-    def _trim_advertisement_for_legacy_adv(ble) -> None:
-        """Evita paquete AD >31 bytes: UUID 128-bit + nombre largo no caben juntos."""
-        try:
-            # Web Bluetooth usa namePrefix; el servicio sigue disponible vía GATT.
-            ble.advert.service_UUIDs = []
-        except Exception as exc:
-            logger.debug("Anuncio: no se pudo omitir ServiceUUIDs: %s", exc)
-        try:
-            from bluezero import constants
-
-            ble.advert.props[constants.LE_ADVERTISEMENT_IFACE]["Appearance"] = None
-        except Exception as exc:
-            logger.debug("Anuncio: no se pudo omitir Appearance: %s", exc)
-
     def _publish_peripheral(self, ble, shutdown: threading.Event) -> None:
         """Publica GATT + LE advertisement esperando confirmación de BlueZ."""
         import dbus
@@ -389,7 +391,7 @@ class BluezBluetoothBackend(BluetoothBackend):
         for descriptor in ble.descriptors:
             ble.app.add_managed_object(descriptor)
         ble._create_advertisement()
-        self._trim_advertisement_for_legacy_adv(ble)
+        self._configure_le_advertisement(ble, self.settings.device_name)
 
         if not ble.dongle.powered:
             ble.dongle.powered = True
@@ -488,16 +490,6 @@ class BluezBluetoothBackend(BluetoothBackend):
             if self._should_stop(shutdown):
                 return False
             self._run_pending_mainloop_actions()
-            if not self.has_active_client() and self._advert_registered.is_set():
-                from nilocardmed.bluetooth.advertising_status import read_le_advertising_state
-
-                le_state = read_le_advertising_state(timeout=2.0)
-                if not le_state.get("le_advertising_active"):
-                    logger.warning(
-                        "Watchdog BLE: anuncio LE inactivo (ActiveInstances=%s); restaurando",
-                        le_state.get("active_instances"),
-                    )
-                    self._refresh_le_advertising()
             return True
 
         GLib.timeout_add_seconds(15, _periodic_ble_maintenance)
@@ -579,19 +571,12 @@ class BluezBluetoothBackend(BluetoothBackend):
         if ble is None or self.has_active_client():
             return
 
-        from nilocardmed.bluetooth.advertising_status import (
-            purge_stale_bluez_registrations,
-            read_le_advertising_state,
-        )
-
-        le_state = read_le_advertising_state(timeout=2.0)
-        if le_state.get("le_advertising_active"):
+        now = time.monotonic()
+        if now - self._last_le_advert_refresh_at < 30.0:
             return
+        self._last_le_advert_refresh_at = now
 
-        logger.warning(
-            "Restaurando anuncio LE (ActiveInstances=%s)",
-            le_state.get("active_instances"),
-        )
+        logger.info("Restaurando anuncio LE con LocalName=%r", self.settings.device_name)
 
         def _on_refresh_ok() -> None:
             self._advert_registered.set()
@@ -654,7 +639,7 @@ class BluezBluetoothBackend(BluetoothBackend):
         ble = peripheral.Peripheral(
             adapter_address,
             local_name=self.settings.device_name,
-            appearance=self.settings.appearance,
+            appearance=None,
         )
         self._peripheral = ble
 
@@ -662,6 +647,7 @@ class BluezBluetoothBackend(BluetoothBackend):
             self._tx_characteristic = None
             logger.info("Cliente BLE desconectado (adaptador)")
             trace_ble_client(event="desconectado", detail="desconexión del adaptador")
+            self.request_advertising_refresh()
 
         try:
             ble.on_disconnect = _handle_disconnect
