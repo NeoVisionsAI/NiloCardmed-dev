@@ -246,7 +246,20 @@ def create_http_server(
     _Handler.bluetooth_settings = bluetooth_settings
 
     bind_host = settings.ap_ip if settings.bind_ap_only else settings.host
-    server = ThreadingHTTPServer((bind_host, settings.port), _Handler)
+    try:
+        server = ThreadingHTTPServer((bind_host, settings.port), _Handler)
+    except OSError as exc:
+        if settings.bind_ap_only and bind_host not in ("0.0.0.0", ""):
+            logger.warning(
+                "HTTP no pudo enlazar en %s:%s (%s); usando %s",
+                bind_host,
+                settings.port,
+                exc,
+                settings.host,
+            )
+            server = ThreadingHTTPServer((settings.host, settings.port), _Handler)
+        else:
+            raise
     server.allow_reuse_address = True
     server.daemon_threads = True
     return server
@@ -276,13 +289,18 @@ class HttpProvisioningService:
         if self._thread and self._thread.is_alive():
             return
 
-        self._server = create_http_server(
-            self.settings,
-            self._config_manager,
-            self._env,
-            self._bluetooth_settings,
-        )
-        bind_host = self.settings.ap_ip if self.settings.bind_ap_only else self.settings.host
+        try:
+            self._server = create_http_server(
+                self.settings,
+                self._config_manager,
+                self._env,
+                self._bluetooth_settings,
+            )
+        except OSError as exc:
+            logger.error("No se pudo iniciar servidor HTTP de aprovisionamiento: %s", exc)
+            return
+
+        bind_host = self._server.server_address[0]
         logger.info(
             "Servidor HTTP de aprovisionamiento en http://%s:%s",
             bind_host,

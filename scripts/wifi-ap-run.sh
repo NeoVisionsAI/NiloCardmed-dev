@@ -13,6 +13,33 @@ AP_IP="${WIFI_AP_IP:-192.168.4.1}"
 AP_CIDR="${WIFI_AP_CIDR:-24}"
 AP_SSID_PREFIX="${WIFI_AP_SSID_PREFIX:-Nilocardmed-Config}"
 WIFI_COUNTRY="${WIFI_COUNTRY_CODE:-ES}"
+AP_PASSWORD="${WIFI_AP_PASSWORD:-}"
+
+read_env_value() {
+  local file="$1"
+  local key="$2"
+  [[ -f "${file}" ]] || return 1
+  grep -E "^${key}=" "${file}" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || return 1
+}
+
+resolve_ap_password() {
+  local pwd="${WIFI_AP_PASSWORD:-}"
+  if [[ -n "${pwd}" ]]; then
+    echo "${pwd}"
+    return 0
+  fi
+  pwd="$(read_env_value "${INSTALL_DIR}/.env" "NILOCARDMED_CONNECTION_PASSWORD" || true)"
+  if [[ -n "${pwd}" && "${pwd}" != "changeme" ]]; then
+    echo "${pwd}"
+    return 0
+  fi
+  pwd="$(read_env_value "${INSTALL_DIR}/.env" "NILOCARDMED_BLUETOOTH__PASSWORD" || true)"
+  if [[ -n "${pwd}" && "${pwd}" != "changeme" ]]; then
+    echo "${pwd}"
+    return 0
+  fi
+  return 1
+}
 
 log() { echo "[nilocardmed-wifi-ap] $*"; }
 log_warn() { echo "[nilocardmed-wifi-ap][AVISO] $*" >&2; }
@@ -28,6 +55,7 @@ load_deploy_env() {
   AP_CIDR="${WIFI_AP_CIDR:-24}"
   AP_SSID_PREFIX="${WIFI_AP_SSID_PREFIX:-Nilocardmed-Config}"
   WIFI_COUNTRY="${WIFI_COUNTRY_CODE:-ES}"
+  AP_PASSWORD="${WIFI_AP_PASSWORD:-}"
 }
 
 mac_suffix() {
@@ -85,6 +113,7 @@ configure_ap_address() {
 write_hostapd_conf() {
   local ssid="$1"
   local channel="$2"
+  local password="${3:-}"
   local conf="${CONFIG_DIR}/hostapd.conf"
   mkdir -p "${CONFIG_DIR}"
   cat >"${conf}" <<EOF
@@ -95,11 +124,22 @@ hw_mode=g
 channel=${channel}
 country_code=${WIFI_COUNTRY}
 ieee80211n=1
-wmm_enabled=0
+wmm_enabled=1
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
 EOF
+  if [[ -n "${password}" && ${#password} -ge 8 && ${#password} -le 63 ]]; then
+    cat >>"${conf}" <<EOF
+wpa=2
+wpa_key_mgmt=WPA-PSK
+wpa_passphrase=${password}
+rsn_pairwise=CCMP
+EOF
+    log "AP WPA2-PSK activo (contraseña requerida para unirse)"
+  else
+    log_warn "WIFI_AP_PASSWORD ausente o inválida (8-63 chars) — AP ABIERTO (inseguro)"
+  fi
 }
 
 write_dnsmasq_conf() {
@@ -122,14 +162,15 @@ start_ap() {
   mkdir -p "${RUN_DIR}"
   wait_for_sta || true
 
-  local suffix ssid channel
+  local suffix ssid channel ap_password
   suffix="$(mac_suffix)"
   ssid="${AP_SSID_PREFIX}-${suffix}"
   channel="$(detect_channel)"
+  ap_password="$(resolve_ap_password || true)"
 
   ensure_ap_interface
   configure_ap_address
-  write_hostapd_conf "${ssid}" "${channel}"
+  write_hostapd_conf "${ssid}" "${channel}" "${ap_password}"
   write_dnsmasq_conf
 
   if [[ -f "${RUN_DIR}/hostapd.pid" ]] && kill -0 "$(cat "${RUN_DIR}/hostapd.pid")" 2>/dev/null; then

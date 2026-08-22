@@ -543,8 +543,8 @@ class HttpSettings(BaseModel):
     host: str = "0.0.0.0"
     port: int = Field(default=8080, ge=1, le=65535)
     bind_ap_only: bool = Field(
-        default=True,
-        description="Enlazar solo a la IP del AP (192.168.4.1) para aislar el servicio",
+        default=False,
+        description="Si true, intenta enlazar solo a ap_ip; fallback a host si uap0 no está lista",
     )
     ap_interface: str = "uap0"
     ap_ip: str = "192.168.4.1"

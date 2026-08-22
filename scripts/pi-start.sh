@@ -201,6 +201,11 @@ run_checks() {
     else
       check_warn "nilocardmed-wifi-ap no activo — sudo systemctl restart nilocardmed-wifi-ap"
     fi
+    if curl -sf --connect-timeout 3 "http://127.0.0.1:8080/api/status" >/dev/null 2>&1; then
+      check_ok "HTTP aprovisionamiento responde en :8080"
+    else
+      check_warn "HTTP :8080 no responde — revisa NILOCARDMED_HTTP__ENABLED=true y docker logs nilocardmed"
+    fi
     if systemctl is-active --quiet bluetooth 2>/dev/null; then
       check_warn "Bluetooth host activo con WiFi AP — debería estar off (ahorro RAM)"
     else

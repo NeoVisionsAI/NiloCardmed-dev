@@ -262,7 +262,23 @@ ensure_app_production_flags() {
   update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__BACKEND" "bluez"
   update_env_file "${env_file}" "NILOCARDMED_WIFI__ENABLED" "true"
   update_env_file "${env_file}" "NILOCARDMED_HTTP__ENABLED" "true"
+  update_env_file "${env_file}" "NILOCARDMED_HTTP__BIND_AP_ONLY" "false"
   log_info ".env: WiFi + HTTP local habilitados; BLE desactivado (código conservado)"
+}
+
+sync_wifi_ap_password_from_env() {
+  local deploy_file="$1"
+  local env_file="$2"
+  local pwd=""
+
+  pwd="$(read_env_value "${env_file}" "NILOCARDMED_CONNECTION_PASSWORD" || true)"
+  if [[ -z "${pwd}" || "${pwd}" == "changeme" ]]; then
+    pwd="$(read_env_value "${env_file}" "NILOCARDMED_BLUETOOTH__PASSWORD" || true)"
+  fi
+  if [[ -n "${pwd}" && "${pwd}" != "changeme" ]]; then
+    update_env_file "${deploy_file}" "WIFI_AP_PASSWORD" "${pwd}"
+    log_info "deploy.env: WIFI_AP_PASSWORD sincronizada (WPA2 en AP)"
+  fi
 }
 
 migrate_deploy_service_name_var() {
@@ -400,8 +416,10 @@ setup_deploy_and_app_env() {
 
   update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__DEVICE_NAME" "${BLE_DEVICE_NAME}"
   update_env_file "${env_file}" "NILOCARDMED_CONNECTION_PASSWORD" "${CONNECTION_PASSWORD}"
+  update_env_file "${deploy_file}" "WIFI_AP_PASSWORD" "${CONNECTION_PASSWORD}"
   update_env_file "${env_file}" "NILOCARDMED_SER__DEVICE_ID" "${DEVICE_UUID}"
   ensure_app_production_flags "${env_file}"
+  sync_wifi_ap_password_from_env "${deploy_file}" "${env_file}"
   normalize_env_list_values "${env_file}"
 
   log_info "Configuración aplicada:"
