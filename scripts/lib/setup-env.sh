@@ -95,7 +95,12 @@ read_secret_from_tty() {
 
 has_existing_connection_password() {
   local existing="$1"
-  [[ -n "${existing}" && "${existing}" != "changeme" ]]
+  connection_password_is_valid "${existing}"
+}
+
+connection_password_is_valid() {
+  local existing="$1"
+  [[ -n "${existing}" && "${existing}" != "changeme" && ${#existing} -ge 8 && ${#existing} -le 63 ]]
 }
 
 read_existing_connection_password() {
@@ -112,6 +117,25 @@ read_existing_connection_password() {
     return 0
   fi
   return 1
+}
+
+# Copia BLE legacy → CONNECTION_PASSWORD si falta o es demasiado corta para WPA2.
+migrate_legacy_connection_password() {
+  local env_file="$1"
+  local current legacy
+
+  current="$(read_env_value "${env_file}" "NILOCARDMED_CONNECTION_PASSWORD" || true)"
+  if connection_password_is_valid "${current}"; then
+    return 0
+  fi
+
+  legacy="$(read_env_value "${env_file}" "NILOCARDMED_BLUETOOTH__PASSWORD" || true)"
+  if connection_password_is_valid "${legacy}"; then
+    log_info "Migrando NILOCARDMED_BLUETOOTH__PASSWORD → NILOCARDMED_CONNECTION_PASSWORD (WPA2)"
+    update_env_file "${env_file}" "NILOCARDMED_CONNECTION_PASSWORD" "${legacy}"
+  elif [[ -n "${current}" || -n "${legacy}" ]]; then
+    log_warn "Contraseña existente demasiado corta para WPA2 (mín. 8) — se pedirá una nueva"
+  fi
 }
 
 prompt_connection_password() {
@@ -152,19 +176,22 @@ prompt_connection_password() {
       export CONNECTION_PASSWORD="${password}"
       return 0
     fi
-  else
+  fi
+
+  if [[ -n "${existing}" ]] && ! connection_password_is_valid "${existing}"; then
+    echo "[nilocardmed] La contraseña anterior no vale para WPA2 (mín. 8 caracteres). Introduce una nueva." >/dev/tty
+  fi
+
+  while [[ -z "${password}" || ${#password} -lt 8 ]]; do
+    if [[ -n "${password}" && ${#password} -lt 8 ]]; then
+      echo "[nilocardmed][ERROR] Mínimo 8 caracteres (WPA2)." >/dev/tty
+      password=""
+    fi
     read_secret_from_tty \
-      "Contraseña [mín. 8 caracteres; obligatoria la primera vez]: " \
+      "Contraseña aprovisionamiento [mín. 8 caracteres]: " \
       0 \
       password || true
-    while [[ -z "${password}" || ${#password} -lt 8 ]]; do
-      if [[ -n "${password}" && ${#password} -lt 8 ]]; then
-        echo "[nilocardmed][ERROR] Mínimo 8 caracteres (WPA2)." >/dev/tty
-      fi
-      password=""
-      read_secret_from_tty "Contraseña: " 0 password || true
-    done
-  fi
+  done
 
   while true; do
     read_secret_from_tty "Repite la contraseña: " 0 confirm || true
@@ -173,7 +200,7 @@ prompt_connection_password() {
     fi
     echo "[nilocardmed][ERROR] No coinciden. Vuelve a intentarlo." >/dev/tty
     password=""
-    while [[ -z "${password}" ]]; do
+    while [[ -z "${password}" || ${#password} -lt 8 ]]; do
       read_secret_from_tty "Contraseña: " 0 password || true
     done
   done
@@ -275,14 +302,14 @@ sync_wifi_ap_password_from_env() {
   local pwd=""
 
   pwd="$(read_env_value "${env_file}" "NILOCARDMED_CONNECTION_PASSWORD" || true)"
-  if [[ -z "${pwd}" || "${pwd}" == "changeme" ]]; then
+  if ! connection_password_is_valid "${pwd}"; then
     pwd="$(read_env_value "${env_file}" "NILOCARDMED_BLUETOOTH__PASSWORD" || true)"
   fi
-  if [[ -n "${pwd}" && "${pwd}" != "changeme" ]]; then
+  if connection_password_is_valid "${pwd}"; then
     update_env_file "${deploy_file}" "WIFI_AP_PASSWORD" "${pwd}"
     log_info "deploy.env: WIFI_AP_PASSWORD sincronizada (WPA2 en AP)"
   else
-    log_warn "Sin contraseña válida en .env — el AP quedará ABIERTO hasta configurar NILOCARDMED_CONNECTION_PASSWORD"
+    log_warn "Sin contraseña WPA2 válida en .env — configura NILOCARDMED_CONNECTION_PASSWORD (8-63 chars)"
   fi
 }
 
@@ -417,7 +444,13 @@ setup_deploy_and_app_env() {
   fi
 
   load_or_create_device_identity "${data_dir}"
+  migrate_legacy_connection_password "${env_file}"
   prompt_connection_password "${env_file}"
+
+  if ! connection_password_is_valid "${CONNECTION_PASSWORD:-}"; then
+    log_error "Contraseña inválida tras setup (8-63 caracteres, no 'changeme')"
+    exit 1
+  fi
 
   update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__DEVICE_NAME" "${BLE_DEVICE_NAME}"
   update_env_file "${env_file}" "NILOCARDMED_CONNECTION_PASSWORD" "${CONNECTION_PASSWORD}"

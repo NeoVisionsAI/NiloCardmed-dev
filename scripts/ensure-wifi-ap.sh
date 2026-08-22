@@ -71,6 +71,7 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 Environment=INSTALL_DIR=${INSTALL_DIR}
+EnvironmentFile=-${INSTALL_DIR}/deploy.env
 ExecStart=${INSTALL_DIR}/scripts/wifi-ap-run.sh start
 ExecStop=${INSTALL_DIR}/scripts/wifi-ap-run.sh stop
 TimeoutStartSec=180
@@ -82,7 +83,14 @@ EOF
 chmod +x "${INSTALL_DIR}/scripts/wifi-ap-run.sh"
 systemctl daemon-reload
 systemctl enable nilocardmed-wifi-ap.service
-run_with_timeout 120 systemctl restart nilocardmed-wifi-ap.service \
-  || log_warn "El AP puede tardar hasta que wlan0 esté listo; reintenta: systemctl restart nilocardmed-wifi-ap"
 
-log_info "Servicio nilocardmed-wifi-ap habilitado"
+if run_with_timeout 120 systemctl restart nilocardmed-wifi-ap.service; then
+  log_info "Servicio nilocardmed-wifi-ap activo"
+else
+  log_error "nilocardmed-wifi-ap falló al arrancar"
+  "${INSTALL_DIR}/scripts/wifi-ap-run.sh" diagnose 2>&1 || true
+  journalctl -u nilocardmed-wifi-ap -n 20 --no-pager 2>/dev/null || true
+  log_error "Logs: /var/log/nilocardmed/wifi-ap/hostapd.log"
+  log_error "Prueba: sudo ${INSTALL_DIR}/scripts/wifi-ap-run.sh diagnose"
+  exit 1
+fi

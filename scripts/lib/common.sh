@@ -563,10 +563,10 @@ ensure_bluetooth_disabled_for_wifi_ap() {
 
   if systemctl list-unit-files bluetooth.service >/dev/null 2>&1; then
     log_info "Deteniendo bluetooth.service (timeout 8 s)..."
-    run_with_timeout 2 systemctl kill --signal=SIGKILL bluetooth.service
-    run_with_timeout 8 systemctl stop bluetooth.service
-    run_with_timeout 5 systemctl disable bluetooth.service
-    run_with_timeout 5 systemctl mask bluetooth.service
+    run_with_timeout 2 systemctl kill --signal=SIGKILL bluetooth.service 2>/dev/null || true
+    run_with_timeout 8 systemctl stop bluetooth.service 2>/dev/null || true
+    run_with_timeout 5 systemctl disable bluetooth.service 2>/dev/null || true
+    run_with_timeout 5 systemctl mask bluetooth.service 2>/dev/null || true
   fi
 
   for unit in blueman-mechanism.service blueman-applet.service; do
