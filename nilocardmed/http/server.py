@@ -197,8 +197,17 @@ class ProvisioningHttpHandler(BaseHTTPRequestHandler):
                         "enabled": config.sampling.enabled,
                         "interval_seconds": config.sampling.interval_seconds,
                     },
+                    "camera": {
+                        "device_path": config.camera.device_path,
+                    },
                 },
             )
+            return
+        if path == "/api/dashboard":
+            from nilocardmed.system.device_status import build_device_status
+
+            dashboard = build_device_status(self.router.context)
+            self._send_json(200, dashboard)
             return
         self._send_json(404, {"status": "error", "error": "not_found"})
 

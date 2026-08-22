@@ -124,6 +124,19 @@ class TelemetryStore:
         with self._lock:
             return [event.to_dict() for event in list(self._events)[:limit]]
 
+    def capture_stats(self) -> dict[str, Any]:
+        with self._lock:
+            cycles = list(self._cycles)
+            last_success = self._last_success_at
+            last_tick = self._last_sampler_tick_at
+        successful = sum(1 for cycle in cycles if cycle.get("success"))
+        return {
+            "cycles_recorded": len(cycles),
+            "cycles_successful": successful,
+            "last_success_at_epoch": last_success,
+            "last_sampler_tick_at_epoch": last_tick,
+        }
+
     def load_recent_from_disk(self, limit: int = 100) -> None:
         if self._persist_path is None or not self._persist_path.exists():
             return

@@ -23,6 +23,7 @@ RUN apt-get update \
         v4l-utils \
         fswebcam \
         ffmpeg \
+        zbar-tools \
         gosu \
         zlib1g \
         libjpeg62-turbo \

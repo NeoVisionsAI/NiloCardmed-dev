@@ -583,6 +583,35 @@ ensure_bluetooth_disabled_for_wifi_ap() {
   log_info "Icono del panel: puede mentir hasta cerrar sesión; comprueba: rfkill list bluetooth"
 }
 
+# Asegura DHCP (udhcpd/dnsmasq) en uap0 tras hostapd activo.
+repair_wifi_ap_dhcp_if_enabled() {
+  local install_dir="${1:-${INSTALL_DIR:-}}"
+
+  if [[ -f "${install_dir}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${install_dir}/deploy.env" && set +a
+  fi
+
+  if ! resolve_wifi_ap_enabled || [[ "${EUID}" -ne 0 ]]; then
+    return 0
+  fi
+
+  local ap_script="${install_dir}/scripts/wifi-ap-run.sh"
+  if [[ ! -f "${ap_script}" ]]; then
+    return 0
+  fi
+
+  log_info "=== DHCP del AP WiFi (repair-dhcp) ==="
+  if INSTALL_DIR="${install_dir}" bash "${ap_script}" repair-dhcp; then
+    log_info "DHCP del AP activo"
+    INSTALL_DIR="${install_dir}" bash "${ap_script}" status 2>&1 || true
+    return 0
+  fi
+
+  log_warn "repair-dhcp falló — prueba: sudo ${ap_script} repair-dhcp"
+  return 1
+}
+
 restart_wifi_ap_if_enabled() {
   local install_dir="${1:-${INSTALL_DIR:-}}"
 
@@ -595,17 +624,23 @@ restart_wifi_ap_if_enabled() {
     return 0
   fi
 
+  local ap_script="${install_dir}/scripts/wifi-ap-run.sh"
+
   if systemctl list-unit-files nilocardmed-wifi-ap.service >/dev/null 2>&1; then
     log_info "Reiniciando AP WiFi (aplica WPA / hostapd)..."
     if ! run_with_timeout 90 systemctl restart nilocardmed-wifi-ap.service; then
       log_warn "nilocardmed-wifi-ap falló al reiniciar — diagnóstico:"
-      local ap_script="${install_dir}/scripts/wifi-ap-run.sh"
       if [[ -f "${ap_script}" ]]; then
         INSTALL_DIR="${install_dir}" bash "${ap_script}" diagnose 2>&1 || true
       fi
       journalctl -u nilocardmed-wifi-ap -n 20 --no-pager 2>/dev/null || true
       log_warn "Prueba: sudo systemctl restart nilocardmed-wifi-ap"
       log_warn "Logs: /var/log/nilocardmed/wifi-ap/hostapd.log"
+    else
+      if [[ -f "${ap_script}" ]]; then
+        INSTALL_DIR="${install_dir}" bash "${ap_script}" wait-ready 2>/dev/null || true
+      fi
+      repair_wifi_ap_dhcp_if_enabled "${install_dir}" || true
     fi
   fi
 }

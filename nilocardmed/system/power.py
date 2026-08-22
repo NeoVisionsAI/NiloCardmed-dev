@@ -93,4 +93,76 @@ def collect_battery_status(*, power_supply_root: Path | None = None) -> dict[str
     if primary and primary.get("capacity_percent") is not None:
         result["level_percent"] = primary["capacity_percent"]
         result["status"] = primary.get("status")
+
+    result.update(_derive_power_presentation(sources))
     return result
+
+
+def _derive_power_presentation(sources: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Normaliza la presentación para UI:
+
+    - mains/usb sin batería → 100 % «Corriente»
+    - batería con carga desde red → 100 % «Corriente» (o nivel si se prefiere mostrar carga)
+    - batería descargando → nivel real; etiqueta «Powerbank» si no hay mains online
+    """
+    mains_online = [
+        source
+        for source in sources
+        if (source.get("type") or "").lower() in {"mains", "ups", "usb"}
+        and source.get("online") is True
+    ]
+    batteries = [source for source in sources if (source.get("type") or "").lower() == "battery"]
+
+    if not sources:
+        return {
+            "power_source": "usb",
+            "source_label": "USB / alimentación externa",
+            "display_percent": 100,
+            "on_battery": False,
+        }
+
+    if batteries:
+        battery = max(
+            batteries,
+            key=lambda item: item.get("capacity_percent")
+            if item.get("capacity_percent") is not None
+            else -1,
+        )
+        capacity = battery.get("capacity_percent")
+        status = (battery.get("status") or "").strip()
+        status_lower = status.lower()
+
+        if mains_online or status_lower in {"charging", "full", "not charging"}:
+            return {
+                "power_source": "mains",
+                "source_label": "Corriente",
+                "display_percent": 100 if status_lower in {"full", "not charging"} or mains_online else capacity,
+                "on_battery": False,
+                "battery_level_percent": capacity,
+                "battery_status": status or None,
+            }
+
+        return {
+            "power_source": "powerbank",
+            "source_label": "Powerbank / batería",
+            "display_percent": capacity,
+            "on_battery": True,
+            "battery_level_percent": capacity,
+            "battery_status": status or None,
+        }
+
+    if mains_online:
+        return {
+            "power_source": "mains",
+            "source_label": "Corriente",
+            "display_percent": 100,
+            "on_battery": False,
+        }
+
+    return {
+        "power_source": "unknown",
+        "source_label": "Alimentación desconocida",
+        "display_percent": None,
+        "on_battery": False,
+    }

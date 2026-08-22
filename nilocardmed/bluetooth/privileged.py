@@ -19,6 +19,10 @@ PRIVILEGED_COMMANDS: frozenset[str] = frozenset(
         "set_interval",
         "sampling_set_window",
         "set_monitor_window",
+        "camera_set_device",
+        "set_camera_device",
+        "cardmed_scan_qr",
+        "scan_cardmed_qr",
     }
 )
 

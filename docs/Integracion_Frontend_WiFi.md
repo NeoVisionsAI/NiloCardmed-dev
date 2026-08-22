@@ -129,6 +129,18 @@ Resumen de configuración (sin secretos). Sin autenticación.
 }
 ```
 
+### GET `/api/dashboard`
+
+Panel agregado para la pestaña **Estado** (sin autenticación; solo accesible en el AP).
+
+Incluye en una sola respuesta: WiFi en vivo, alimentación (`power.display_percent`, `power.source_label`), sampling, cámara, contadores de capturas, CardMed resumido y `config_last_saved_at`.
+
+Equivalente autenticado: comando `device_status` vía `POST /api/command`.
+
+Comandos adicionales para la UI v2: `camera_get_device`, `camera_set_device`, `cardmed_scan_qr`, `cardmed_configure` con `config_code` / `config_json`.
+
+Briefing UI detallado: **`docs/MENSAJE_AGENTE_FRONTEND_WIFI_UI.md`**.
+
 ### POST `/api/command`
 
 Mismo contrato JSON que BLE GATT.

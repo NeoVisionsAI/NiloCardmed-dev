@@ -18,11 +18,13 @@ from nilocardmed.config.models import AppConfig
 from nilocardmed.cardmed.handlers import (
     handle_cardmed_configure,
     handle_cardmed_get,
+    handle_cardmed_scan_qr,
     handle_cardmed_test,
 )
 from nilocardmed.resilience.handlers import handle_health_status
 from nilocardmed.system.handlers import (
     handle_battery_status,
+    handle_device_status,
     handle_events_list,
     handle_sampler_history,
     handle_storage_status,
@@ -103,6 +105,27 @@ def handle_camera_list(ctx: CommandContext, request: CommandRequest) -> dict[str
     except CameraError as exc:
         raise BluetoothCommandError("camera_error", str(exc)) from exc
     return {"cameras": [_camera_device_to_dict(device) for device in cameras]}
+
+
+def handle_camera_get_device(ctx: CommandContext, _request: CommandRequest) -> dict[str, Any]:
+    from nilocardmed.system.device_status import camera_status
+
+    status = camera_status(ctx)
+    return {
+        "device_path": status.get("saved_device"),
+        "saved_device_present": status.get("saved_device_present", False),
+        "camera_connected": status.get("connected", False),
+        "active_device": status.get("active_device"),
+        "cameras": status.get("cameras", []),
+    }
+
+
+def handle_camera_set_device(ctx: CommandContext, request: CommandRequest) -> dict[str, Any]:
+    device = str(_require_payload_field(request, "device"))
+    config = ctx.config_manager.get()
+    config.camera.device_path = device
+    _save_config_and_trace(ctx, config, "cámara seleccionada", device_path=device)
+    return {"device_path": device}
 
 
 def handle_camera_capture_test(ctx: CommandContext, request: CommandRequest) -> dict[str, Any]:
@@ -351,6 +374,8 @@ def register_operation_handlers(router) -> None:
         ("ping", handle_ping, []),
         ("commands_list", handle_commands_list, ["list_commands"]),
         ("camera_list", handle_camera_list, ["list_cameras"]),
+        ("camera_get_device", handle_camera_get_device, ["get_camera_device"]),
+        ("camera_set_device", handle_camera_set_device, ["set_camera_device"]),
         ("camera_capture_test", handle_camera_capture_test, ["capture_test"]),
         ("camera_capture_chunk", handle_camera_capture_chunk, []),
         ("camera_test", handle_camera_test, ["test_camera"]),
@@ -364,8 +389,10 @@ def register_operation_handlers(router) -> None:
         ("wifi_test", handle_wifi_test, []),
         ("cardmed_get", handle_cardmed_get, ["get_cardmed_config"]),
         ("cardmed_configure", handle_cardmed_configure, ["configure_cardmed", "configurar"]),
+        ("cardmed_scan_qr", handle_cardmed_scan_qr, ["scan_cardmed_qr"]),
         ("cardmed_test", handle_cardmed_test, ["probar_cardmed", "test_cardmed", "probar"]),
         ("health_status", handle_health_status, ["health", "system_health"]),
+        ("device_status", handle_device_status, ["dashboard", "status_panel"]),
         ("system_info", handle_system_info, []),
         ("battery_status", handle_battery_status, ["power_status", "battery"]),
         ("storage_status", handle_storage_status, []),

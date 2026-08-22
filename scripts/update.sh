@@ -29,7 +29,7 @@ Uso: sudo ./scripts/update.sh [--build]
     - chmod +x en scripts/
     - paquetes WiFi AP si faltan: hostapd, dnsmasq, udhcpd, iw
     - contraseña WPA (NILOCARDMED_CONNECTION_PASSWORD, ≥8 chars)
-    - systemd nilocardmed-wifi-ap + DHCP (dnsmasq/udhcpd)
+    - systemd nilocardmed-wifi-ap + repair-dhcp (udhcpd/dnsmasq)
     - reinicio contenedor Docker + AP WiFi
 
   Ejemplos:
@@ -38,9 +38,6 @@ Uso: sudo ./scripts/update.sh [--build]
 
   Comprobar AP:
     sudo /opt/nilocardmed/scripts/wifi-ap-run.sh status
-
-  Reparar solo DHCP:
-    sudo /opt/nilocardmed/scripts/wifi-ap-run.sh repair-dhcp
 
   Primera instalación: sudo ./scripts/install.sh
 EOF

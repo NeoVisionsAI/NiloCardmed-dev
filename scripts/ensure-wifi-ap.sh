@@ -107,7 +107,7 @@ systemctl enable nilocardmed-wifi-ap.service
 if run_with_timeout 120 systemctl restart nilocardmed-wifi-ap.service; then
   if INSTALL_DIR="${INSTALL_DIR}" "${INSTALL_DIR}/scripts/wifi-ap-run.sh" wait-ready; then
     log_info "Servicio nilocardmed-wifi-ap activo"
-    INSTALL_DIR="${INSTALL_DIR}" "${INSTALL_DIR}/scripts/wifi-ap-run.sh" status 2>&1 || true
+    repair_wifi_ap_dhcp_if_enabled "${INSTALL_DIR}" || true
   else
     log_error "nilocardmed-wifi-ap arrancó pero el AP no emitió SSID a tiempo"
     "${INSTALL_DIR}/scripts/wifi-ap-run.sh" diagnose 2>&1 || true

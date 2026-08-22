@@ -30,6 +30,28 @@ CARDMED_CONFIG_FIELDS = frozenset(
 
 def extract_cardmed_patch(payload: dict) -> dict:
     """Extrae campos CardMed de un payload Bluetooth/CLI."""
+    if "config_code" in payload and payload["config_code"] is not None:
+        from nilocardmed.cardmed.config_codes import parse_config_code
+
+        return parse_config_code(str(payload["config_code"]))
+
+    if "config_json" in payload and payload["config_json"] is not None:
+        raw = payload["config_json"]
+        if isinstance(raw, dict):
+            nested = raw
+        else:
+            import json
+
+            try:
+                nested = json.loads(str(raw))
+            except json.JSONDecodeError as exc:
+                raise CardMedConfigError(f"config_json inválido: {exc}") from exc
+        if not isinstance(nested, dict):
+            raise CardMedConfigError("config_json debe ser un objeto JSON")
+        if "cardmed" in nested and isinstance(nested["cardmed"], dict):
+            return dict(nested["cardmed"])
+        return {key: value for key, value in nested.items() if key in CARDMED_CONFIG_FIELDS}
+
     if "cardmed" in payload and isinstance(payload["cardmed"], dict):
         return dict(payload["cardmed"])
     return {key: value for key, value in payload.items() if key in CARDMED_CONFIG_FIELDS}

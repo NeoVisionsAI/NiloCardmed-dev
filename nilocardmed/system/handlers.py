@@ -10,6 +10,7 @@ from nilocardmed.bluetooth.protocol import CommandContext
 from nilocardmed.storage.manager import StorageManager
 from nilocardmed.system.info import collect_system_info
 from nilocardmed.system.power import collect_battery_status
+from nilocardmed.system.device_status import build_device_status
 from nilocardmed.system.time_sync import TimeSyncError, read_system_time, set_system_time
 from nilocardmed.telemetry.store import telemetry
 
@@ -23,6 +24,10 @@ def handle_system_info(ctx: CommandContext, _request: CommandRequest) -> dict[st
 
 def handle_battery_status(_ctx: CommandContext, _request: CommandRequest) -> dict[str, Any]:
     return collect_battery_status()
+
+
+def handle_device_status(ctx: CommandContext, _request: CommandRequest) -> dict[str, Any]:
+    return build_device_status(ctx)
 
 
 def handle_storage_status(ctx: CommandContext, _request: CommandRequest) -> dict[str, Any]:
