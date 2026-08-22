@@ -24,7 +24,9 @@ read_env_value() {
 
 resolve_ap_password() {
   local pwd="${WIFI_AP_PASSWORD:-}"
-  if [[ -n "${pwd}" ]]; then
+  pwd="${pwd#"${pwd%%[![:space:]]*}"}"
+  pwd="${pwd%"${pwd##*[![:space:]]}"}"
+  if [[ -n "${pwd}" && "${pwd}" != "changeme" ]]; then
     echo "${pwd}"
     return 0
   fi
@@ -115,6 +117,13 @@ write_hostapd_conf() {
   local channel="$2"
   local password="${3:-}"
   local conf="${CONFIG_DIR}/hostapd.conf"
+
+  if [[ -z "${password}" || ${#password} -lt 8 || ${#password} -gt 63 ]]; then
+    log_warn "Sin contraseña WPA válida (8-63 chars en WIFI_AP_PASSWORD / NILOCARDMED_CONNECTION_PASSWORD)"
+    log_warn "Ejecuta: sudo ./scripts/update.sh  (pedirá contraseña de aprovisionamiento)"
+    return 1
+  fi
+
   mkdir -p "${CONFIG_DIR}"
   cat >"${conf}" <<EOF
 interface=${AP_INTERFACE}
@@ -128,18 +137,12 @@ wmm_enabled=1
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
-EOF
-  if [[ -n "${password}" && ${#password} -ge 8 && ${#password} -le 63 ]]; then
-    cat >>"${conf}" <<EOF
 wpa=2
 wpa_key_mgmt=WPA-PSK
 wpa_passphrase=${password}
 rsn_pairwise=CCMP
 EOF
-    log "AP WPA2-PSK activo (contraseña requerida para unirse)"
-  else
-    log_warn "WIFI_AP_PASSWORD ausente o inválida (8-63 chars) — AP ABIERTO (inseguro)"
-  fi
+  log "AP WPA2-PSK activo (la tablet debe introducir esta contraseña al unirse)"
 }
 
 write_dnsmasq_conf() {
@@ -167,10 +170,15 @@ start_ap() {
   ssid="${AP_SSID_PREFIX}-${suffix}"
   channel="$(detect_channel)"
   ap_password="$(resolve_ap_password || true)"
+  if [[ -z "${ap_password}" ]]; then
+    log_warn "No hay contraseña para WPA — abortando AP abierto"
+    log_warn "Ejecuta: sudo ./scripts/update.sh  (pedirá contraseña de aprovisionamiento)"
+    exit 1
+  fi
 
   ensure_ap_interface
   configure_ap_address
-  write_hostapd_conf "${ssid}" "${channel}" "${ap_password}"
+  write_hostapd_conf "${ssid}" "${channel}" "${ap_password}" || exit 1
   write_dnsmasq_conf
 
   if [[ -f "${RUN_DIR}/hostapd.pid" ]] && kill -0 "$(cat "${RUN_DIR}/hostapd.pid")" 2>/dev/null; then

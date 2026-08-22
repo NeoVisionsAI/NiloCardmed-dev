@@ -22,8 +22,11 @@ for arg in "$@"; do
       cat <<'EOF'
   Uso: sudo ./scripts/update.sh [--build]
 
-  (sin flags)   rsync a /opt/nilocardmed, override compose, Bluetooth host, reinicia servicio
-  --build       además reconstruye imagen Docker (usa caché; capas pip cacheadas)
+  (sin flags)   rsync a /opt/nilocardmed, contraseña AP, reinicia servicios
+  --build       además reconstruye imagen Docker (solo si cambió Dockerfile/deps)
+
+  Tras migración WiFi: sudo ./scripts/update.sh  (pide contraseña; monta código Python)
+  Si HTTP sigue sin responder: sudo ./scripts/update.sh --build  (una vez)
 
   No ejecuta swap/always-on/gpu en caliente (evita colgar SSH/escritorio en Pi Zero 2 W).
   Primera instalación: sudo ./scripts/install.sh (sí aplica tuning de host).

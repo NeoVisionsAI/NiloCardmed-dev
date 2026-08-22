@@ -582,3 +582,65 @@ ensure_bluetooth_disabled_for_wifi_ap() {
   log_info "Bluetooth: servicio enmascarado + rfkill (sin GATT en Pi)"
   log_info "Icono del panel: puede mentir hasta cerrar sesión; comprueba: rfkill list bluetooth"
 }
+
+restart_wifi_ap_if_enabled() {
+  local install_dir="${1:-${INSTALL_DIR:-}}"
+
+  if [[ -f "${install_dir}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${install_dir}/deploy.env" && set +a
+  fi
+
+  if ! resolve_wifi_ap_enabled || [[ "${EUID}" -ne 0 ]]; then
+    return 0
+  fi
+
+  if systemctl list-unit-files nilocardmed-wifi-ap.service >/dev/null 2>&1; then
+    log_info "Reiniciando AP WiFi (aplica WPA / hostapd)..."
+    run_with_timeout 90 systemctl restart nilocardmed-wifi-ap.service \
+      || log_warn "nilocardmed-wifi-ap no reinició a tiempo — prueba: sudo systemctl restart nilocardmed-wifi-ap"
+  fi
+}
+
+verify_http_provisioning() {
+  local install_dir="${1:-${INSTALL_DIR:-}}"
+
+  if [[ -f "${install_dir}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${install_dir}/deploy.env" && set +a
+  fi
+
+  if ! resolve_wifi_ap_enabled; then
+    return 0
+  fi
+
+  local env_file="${install_dir}/.env"
+  if [[ -f "${env_file}" ]] && ! grep -qE '^NILOCARDMED_HTTP__ENABLED=true' "${env_file}" 2>/dev/null; then
+    log_warn "NILOCARDMED_HTTP__ENABLED no está en true en ${env_file}"
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local cname="${NILOCARDMED_CONTAINER_NAME:-nilocardmed}"
+  if ! docker ps --format '{{.Names}}' | grep -qx "${cname}"; then
+    log_warn "Contenedor ${cname} no está en ejecución — HTTP no disponible"
+    return 0
+  fi
+
+  if ! docker exec "${cname}" python -c "from nilocardmed.http.server import HttpProvisioningService" >/dev/null 2>&1; then
+    log_error "La imagen Docker no incluye el servidor HTTP WiFi."
+    log_error "Ejecuta: sudo ./scripts/update.sh --build  (una vez; ~1-3 min con caché)"
+    return 1
+  fi
+
+  if curl -sf --connect-timeout 5 "http://127.0.0.1:8080/api/status" >/dev/null 2>&1; then
+    log_info "HTTP aprovisionamiento OK → http://192.168.4.1:8080/api/status"
+    return 0
+  fi
+
+  log_warn "HTTP :8080 no responde aún — espera 10 s y prueba: curl http://127.0.0.1:8080/api/status"
+  log_warn "Revisa: sudo docker logs ${cname} 2>&1 | tail -30"
+  return 1
+}

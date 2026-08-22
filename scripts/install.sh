@@ -180,6 +180,9 @@ if ! verify_service_and_container; then
   exit 1
 fi
 
+verify_http_provisioning "${INSTALL_DIR}" || true
+restart_wifi_ap_if_enabled "${INSTALL_DIR}"
+
 if ! is_true "${SKIP_HOST_TUNING:-false}"; then
   log_info "=== Restaurar escritorio tras build (lightdm) ==="
   NILOCARDMED_RESTORE_DESKTOP_AFTER=always ensure_host_always_on "${INSTALL_DIR}"

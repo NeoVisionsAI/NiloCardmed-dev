@@ -121,61 +121,64 @@ prompt_connection_password() {
 
   local password=""
   local confirm=""
-  if [[ -t 0 ]] || [[ -r /dev/tty ]]; then
-    if has_existing_connection_password "${existing}"; then
-      read_secret_from_tty \
-        "Contraseña de aprovisionamiento [Enter=mantener; 10 s sin entrada=mantener]: " \
-        10 \
-        password || true
-      if [[ -z "${password}" ]]; then
-        password="${existing}"
-        log_info "Contraseña de aprovisionamiento: se mantiene la existente"
-        export CONNECTION_PASSWORD="${password}"
-        return 0
-      fi
-    else
-      read_secret_from_tty \
-        "Contraseña de aprovisionamiento [obligatoria la primera vez]: " \
-        0 \
-        password || true
-      if [[ -z "${password}" ]]; then
-        log_error "La contraseña de aprovisionamiento es obligatoria en la primera instalación."
-        while [[ -z "${password}" ]]; do
-          read_secret_from_tty "Contraseña de aprovisionamiento: " 0 password || true
-          if [[ -z "${password}" ]]; then
-            log_error "La contraseña no puede estar vacía."
-          fi
-        done
-      fi
-    fi
 
-    while true; do
-      read_secret_from_tty "Repite la contraseña de aprovisionamiento: " 0 confirm || true
-      if [[ "${password}" == "${confirm}" ]]; then
-        break
-      fi
-      log_error "Las contraseñas no coinciden. Vuelve a intentarlo."
-      password=""
-      while [[ -z "${password}" ]]; do
-        read_secret_from_tty "Contraseña de aprovisionamiento: " 0 password || true
-        if [[ -z "${password}" ]]; then
-          log_error "La contraseña no puede estar vacía."
-        fi
-      done
-    done
-  fi
-
-  if [[ -z "${password}" ]]; then
+  if [[ ! -r /dev/tty ]]; then
+    log_warn "Sin TTY (/dev/tty) — no se puede pedir contraseña de forma interactiva"
     if has_existing_connection_password "${existing}"; then
       password="${existing}"
       log_info "Contraseña de aprovisionamiento: se mantiene la existente (sin TTY)"
     else
       password="$(generate_connection_password)"
       log_info "Contraseña de aprovisionamiento generada: ${password}"
-      log_info "Guárdala: la necesitarás en la app tablet (auth HTTP)."
+      log_info "Guárdala: WiFi AP + auth HTTP en la tablet."
     fi
+    export CONNECTION_PASSWORD="${password}"
+    return 0
   fi
 
+  echo "" >/dev/tty
+  echo "[nilocardmed] === Contraseña de aprovisionamiento (WiFi AP + HTTP) ===" >/dev/tty
+  echo "[nilocardmed] Usada para: WPA del AP Nilocardmed-Config-xxxx y comando auth HTTP." >/dev/tty
+  echo "" >/dev/tty
+
+  if has_existing_connection_password "${existing}"; then
+    read_secret_from_tty \
+      "Nueva contraseña [Enter o espera 10 s = mantener la actual]: " \
+      10 \
+      password || true
+    if [[ -z "${password}" ]]; then
+      password="${existing}"
+      echo "[nilocardmed] Contraseña: se mantiene la existente." >/dev/tty
+      export CONNECTION_PASSWORD="${password}"
+      return 0
+    fi
+  else
+    read_secret_from_tty \
+      "Contraseña [mín. 8 caracteres; obligatoria la primera vez]: " \
+      0 \
+      password || true
+    while [[ -z "${password}" || ${#password} -lt 8 ]]; do
+      if [[ -n "${password}" && ${#password} -lt 8 ]]; then
+        echo "[nilocardmed][ERROR] Mínimo 8 caracteres (WPA2)." >/dev/tty
+      fi
+      password=""
+      read_secret_from_tty "Contraseña: " 0 password || true
+    done
+  fi
+
+  while true; do
+    read_secret_from_tty "Repite la contraseña: " 0 confirm || true
+    if [[ "${password}" == "${confirm}" ]]; then
+      break
+    fi
+    echo "[nilocardmed][ERROR] No coinciden. Vuelve a intentarlo." >/dev/tty
+    password=""
+    while [[ -z "${password}" ]]; do
+      read_secret_from_tty "Contraseña: " 0 password || true
+    done
+  done
+
+  echo "[nilocardmed] Contraseña de aprovisionamiento actualizada." >/dev/tty
   export CONNECTION_PASSWORD="${password}"
 }
 
@@ -278,6 +281,8 @@ sync_wifi_ap_password_from_env() {
   if [[ -n "${pwd}" && "${pwd}" != "changeme" ]]; then
     update_env_file "${deploy_file}" "WIFI_AP_PASSWORD" "${pwd}"
     log_info "deploy.env: WIFI_AP_PASSWORD sincronizada (WPA2 en AP)"
+  else
+    log_warn "Sin contraseña válida en .env — el AP quedará ABIERTO hasta configurar NILOCARDMED_CONNECTION_PASSWORD"
   fi
 }
 
@@ -428,5 +433,6 @@ setup_deploy_and_app_env() {
   log_info "  connection_password=(configurada en .env como NILOCARDMED_CONNECTION_PASSWORD)"
   if [[ "${EUID}" -eq 0 ]]; then
     ensure_install_dir_permissions "${install_dir}"
+    restart_wifi_ap_if_enabled "${install_dir}"
   fi
 }

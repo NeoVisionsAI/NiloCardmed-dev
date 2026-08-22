@@ -70,6 +70,12 @@ if is_true "${ENABLE_WIFI:-false}"; then
     volumes+=("${dbus_path}:/var/run/dbus/system_bus_socket:ro")
 fi
 
+# Código Python del host → contenedor (update.sh sin --build aplica cambios al reiniciar)
+if [[ -d "${INSTALL_DIR}/nilocardmed" ]]; then
+  volumes+=("${INSTALL_DIR}/nilocardmed:/app/nilocardmed:ro")
+  log_info "Código Python montado desde ${INSTALL_DIR}/nilocardmed (live update)"
+fi
+
 extra_group_gids=()
 primary_group="${CONTAINER_GROUP_ADD:-video}"
 primary_gid=""
