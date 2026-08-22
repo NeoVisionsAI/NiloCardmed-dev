@@ -109,7 +109,6 @@ ensure_host_directories
 
 if is_true "${SKIP_HOST_TUNING:-false}"; then
   log_info "=== Host tuning omitido (--skip-host-tuning / update.sh) ==="
-  ensure_host_lightdm_fix_only "${INSTALL_DIR}"
 else
   ensure_host_always_on "${INSTALL_DIR}"
   ensure_host_swap "${INSTALL_DIR}"
@@ -134,6 +133,9 @@ if is_true "${SKIP_BUILD:-false}"; then
 else
   log_info "=== Build Docker (plataforma: ${DOCKER_DEFAULT_PLATFORM:-linux/arm/v7}) ==="
   log_info "Primera build ~15-30 min; cambios solo de código ~1-3 min (caché de capas pip)."
+  log_info "Pi Zero 2 W: parando contenedor antes del build para liberar RAM (evita colgar SSH)."
+  run_compose_in_install_dir stop nilocardmed 2>/dev/null || true
+  sync
   export DOCKER_BUILDKIT=1
   (
     cd "${INSTALL_DIR}"
