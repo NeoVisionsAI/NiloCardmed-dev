@@ -72,15 +72,16 @@ read_secret_from_tty() {
   local value=""
   local rc=0
 
+  # No usar -rsp junto: -p consumiría el siguiente argumento (-t) como prompt.
   if [[ "${timeout_seconds}" -gt 0 ]]; then
-    if read -rsp -t "${timeout_seconds}" "${prompt}" value </dev/tty; then
+    if read -r -s -t "${timeout_seconds}" -p "${prompt}" value </dev/tty; then
       rc=0
     else
       rc=$?
       value=""
     fi
   else
-    if read -rsp "${prompt}" value </dev/tty; then
+    if read -r -s -p "${prompt}" value </dev/tty; then
       rc=0
     else
       rc=$?
