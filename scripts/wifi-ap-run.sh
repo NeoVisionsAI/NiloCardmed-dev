@@ -273,7 +273,21 @@ dnsmasq_is_running() {
 }
 
 dnsmasq_dhcp_listening() {
-  ss -ulnp 2>/dev/null | grep -qE ':67[^0-9].*dnsmasq|:67 .*dnsmasq'
+  ss -ulnp 2>/dev/null | grep ':67' | grep -qi 'dnsmasq' && return 0
+  ss -ulnp 2>/dev/null | grep -q "${AP_IP}:67" && return 0
+  ss -ulnp 2>/dev/null | grep -q ':67' && return 0
+  return 1
+}
+
+log_dnsmasq() {
+  mkdir -p "${LOG_DIR}"
+  echo "[$(date -Is)] $*" >>"${LOG_DIR}/dnsmasq-start.log"
+}
+
+free_dhcp_port() {
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k 67/udp 2>/dev/null || true
+  fi
 }
 
 test_dnsmasq_conf() {
@@ -307,38 +321,74 @@ stop_dnsmasq() {
     rm -f "${RUN_DIR}/dnsmasq.pid"
   fi
   pkill -f "dnsmasq -C ${CONFIG_DIR}/dnsmasq.conf" 2>/dev/null || true
+  pkill -f "dnsmasq.*interface=${AP_INTERFACE}" 2>/dev/null || true
+  pkill -f "dnsmasq.*${AP_INTERFACE}" 2>/dev/null || true
 }
 
-stop_hostapd() {
-  if [[ -f "${RUN_DIR}/hostapd.pid" ]]; then
-    kill "$(cat "${RUN_DIR}/hostapd.pid")" 2>/dev/null || true
-    rm -f "${RUN_DIR}/hostapd.pid"
-  fi
-  pkill -f "${CONFIG_DIR}/hostapd.conf" 2>/dev/null || true
+start_dnsmasq_cli_fallback() {
+  log_dnsmasq "fallback CLI en ${AP_INTERFACE} (${AP_IP})"
+  dnsmasq \
+    --interface="${AP_INTERFACE}" \
+    --bind-interfaces \
+    --except-interface=lo \
+    --listen-address="${AP_IP}" \
+    -p 0 \
+    --dhcp-range=192.168.4.10,192.168.4.50,255.255.255.0,12h \
+    --dhcp-option=3,"${AP_IP}" \
+    --dhcp-option=6,"${AP_IP}" \
+    --log-dhcp \
+    -x "${RUN_DIR}/dnsmasq.pid" \
+    >>"${LOG_DIR}/dnsmasq-start.log" 2>&1
 }
 
 start_dnsmasq_once() {
   local conf="${CONFIG_DIR}/dnsmasq.conf"
-  mkdir -p "${LOG_DIR}" "${RUN_DIR}"
-  : >>"${LOG_DIR}/dnsmasq-start.log"
+  mkdir -p "${LOG_DIR}" "${RUN_DIR}" "${CONFIG_DIR}"
+  log_dnsmasq "=== intento dnsmasq -C ${conf} ==="
+  log_dnsmasq "dnsmasq $(dnsmasq --version 2>/dev/null | head -1 || echo '?')"
+
+  if ! command -v dnsmasq >/dev/null 2>&1; then
+    log_error "dnsmasq no instalado — sudo apt install dnsmasq"
+    return 1
+  fi
 
   if ! test_dnsmasq_conf; then
     log_warn "dnsmasq --test falló: $(tail -3 "${LOG_DIR}/dnsmasq-start.log" | tr '\n' ' ')"
     return 1
   fi
 
-  dnsmasq -C "${conf}" -x "${RUN_DIR}/dnsmasq.pid" --log-dhcp \
-    >>"${LOG_DIR}/dnsmasq-start.log" 2>&1 || return 1
+  free_dhcp_port
 
-  sleep 1
-  dnsmasq_is_running && dnsmasq_dhcp_listening
+  if ! dnsmasq -C "${conf}" -x "${RUN_DIR}/dnsmasq.pid" --log-dhcp \
+    >>"${LOG_DIR}/dnsmasq-start.log" 2>&1; then
+    log_dnsmasq "dnsmasq exit code $?"
+    return 1
+  fi
+
+  sleep 2
+  if dnsmasq_is_running && dnsmasq_dhcp_listening; then
+    return 0
+  fi
+  if dnsmasq_is_running; then
+    log_warn "dnsmasq pid activo; comprobando puerto 67..."
+    ss -ulnp >>"${LOG_DIR}/dnsmasq-start.log" 2>&1 || true
+    dnsmasq_dhcp_listening && return 0
+  fi
+  log_dnsmasq "falló tras arrancar"
+  return 1
 }
 
 start_dnsmasq() {
   local mode
 
+  if ! command -v dnsmasq >/dev/null 2>&1; then
+    log_error "Paquete dnsmasq no instalado. En la Pi: sudo apt install dnsmasq"
+    return 1
+  fi
+
   stop_dnsmasq
   systemctl stop dnsmasq.service 2>/dev/null || true
+  systemctl disable dnsmasq.service 2>/dev/null || true
   assign_ap_ip
 
   if ! ip link show "${AP_INTERFACE}" 2>/dev/null | grep -q "UP"; then
@@ -356,9 +406,44 @@ start_dnsmasq() {
     stop_dnsmasq
   done
 
+  log_warn "dnsmasq conf falló — probando arranque directo por CLI..."
+  free_dhcp_port
+  if start_dnsmasq_cli_fallback && sleep 2 && dnsmasq_is_running && dnsmasq_dhcp_listening; then
+    log "dnsmasq activo (fallback CLI) — DHCP en ${AP_IP}:67"
+    return 0
+  fi
+  stop_dnsmasq
+
   log_error "dnsmasq no arrancó — log: ${LOG_DIR}/dnsmasq-start.log"
-  tail -8 "${LOG_DIR}/dnsmasq-start.log" >&2 2>/dev/null || true
+  tail -15 "${LOG_DIR}/dnsmasq-start.log" >&2 2>/dev/null || true
+  log_error "Puerto 67: $(ss -ulnp 2>/dev/null | grep ':67' || echo 'libre/nada')"
+  log_error "Procesos: $(pgrep -a dnsmasq 2>/dev/null || echo 'ninguno')"
   return 1
+}
+
+repair_dhcp() {
+  load_deploy_env
+  mkdir -p "${LOG_DIR}" "${RUN_DIR}" "${CONFIG_DIR}"
+  log "=== Reparar DHCP (hostapd puede seguir activo) ==="
+  if ! ip link show "${AP_INTERFACE}" >/dev/null 2>&1; then
+    log_error "No existe ${AP_INTERFACE} — arranca antes: sudo systemctl start nilocardmed-wifi-ap"
+    return 1
+  fi
+  assign_ap_ip
+  write_dnsmasq_conf bind-interfaces
+  if start_dnsmasq; then
+    log "DHCP reparado. Conecta la tablet y mira: sudo tail -f ${LOG_DIR}/dnsmasq-start.log"
+    return 0
+  fi
+  return 1
+}
+
+stop_hostapd() {
+  if [[ -f "${RUN_DIR}/hostapd.pid" ]]; then
+    kill "$(cat "${RUN_DIR}/hostapd.pid")" 2>/dev/null || true
+    rm -f "${RUN_DIR}/hostapd.pid"
+  fi
+  pkill -f "${CONFIG_DIR}/hostapd.conf" 2>/dev/null || true
 }
 
 # hostapd -t falla en brcmfmac con uap0; probamos arranque real con reintentos.
@@ -538,10 +623,11 @@ case "${cmd}" in
   prepare) prepare_ap_core ;;
   stop) stop_ap ;;
   restart) stop_ap; start_ap ;;
+  repair-dhcp) repair_dhcp ;;
   status) status_ap ;;
   diagnose) diagnose_ap ;;
   *)
-    echo "Uso: $0 {start|run|prepare|stop|restart|status|diagnose}" >&2
+    echo "Uso: $0 {start|run|prepare|stop|restart|repair-dhcp|status|diagnose}" >&2
     exit 1
     ;;
 esac
