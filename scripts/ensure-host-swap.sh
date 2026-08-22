@@ -11,6 +11,9 @@ source "${SCRIPT_DIR}/lib/common.sh"
 
 SWAP_FILE="${NILOCARDMED_SWAP_FILE:-/var/swap}"
 DESIRED_SWAP_MB="${NILOCARDMED_SWAP_SIZE_MB:-1024}"
+# Objetivo 1024 MB: free -m puede mostrar 1023, 1000… — no recrear por 1–24 MB de diferencia.
+SWAP_MIN_REPORTED_MB="${NILOCARDMED_SWAP_MIN_REPORTED_MB:-1000}"
+SWAP_MIN_FILE_MB="${NILOCARDMED_SWAP_MIN_FILE_MB:-1000}"
 MIN_FREE_DISK_MB=$((DESIRED_SWAP_MB + 256))
 
 current_swap_mb() {
@@ -73,8 +76,30 @@ ensure_swapon() {
   if swapon --show 2>/dev/null | grep -qF "${SWAP_FILE}"; then
     return 0
   fi
-  swapon "${SWAP_FILE}"
-  log_info "Swap activada: ${SWAP_FILE}"
+  if swapon "${SWAP_FILE}" 2>/dev/null; then
+    log_info "Swap activada: ${SWAP_FILE}"
+  else
+    log_warn "No se pudo activar ${SWAP_FILE} (omitido swapoff para no saturar RAM)"
+    return 1
+  fi
+}
+
+swap_file_active() {
+  swapon --show 2>/dev/null | grep -qF "${SWAP_FILE}"
+}
+
+swap_is_adequate() {
+  local current="$1"
+  local file_mb="$2"
+
+  # Fichero /var/swap ~1 GB ya creado → no swapoff ni dd aunque free -m diga 1023.
+  if [[ -f "${SWAP_FILE}" ]] && [[ "${file_mb}" -ge "${SWAP_MIN_FILE_MB}" ]]; then
+    return 0
+  fi
+  if [[ "${current}" -ge "${SWAP_MIN_REPORTED_MB}" ]] && [[ "${file_mb}" -ge "${SWAP_MIN_FILE_MB}" ]]; then
+    return 0
+  fi
+  return 1
 }
 
 swapoff_target_swaps() {
@@ -138,19 +163,20 @@ main() {
   dedupe_fstab_swap
   log_info "Swap actual: ${current} MB | ${SWAP_FILE}: ${file_mb} MB"
 
-  if [[ "${current}" -ge "${DESIRED_SWAP_MB}" ]] && [[ "${file_mb}" -ge "${DESIRED_SWAP_MB}" ]]; then
-    ensure_swapon
+  if swap_is_adequate "${current}" "${file_mb}"; then
     ensure_fstab_entry
-    log_info "Swap suficiente (${current} MB); no se requieren cambios"
+    if ! swap_file_active; then
+      ensure_swapon || true
+    fi
+    log_info "Swap suficiente (${current} MB reportados, ${file_mb} MB en disco); sin swapoff"
     return 0
   fi
 
-  if [[ -f "${SWAP_FILE}" ]] && [[ "${file_mb}" -ge "${DESIRED_SWAP_MB}" ]]; then
+  if [[ -f "${SWAP_FILE}" ]] && [[ "${file_mb}" -ge "${SWAP_MIN_FILE_MB}" ]]; then
     disable_dphys_swapfile
-    swapoff_target_swaps
-    ensure_swapon
+    ensure_swapon || true
     ensure_fstab_entry
-    log_info "Swap reactivada desde ${SWAP_FILE} (${file_mb} MB)"
+    log_info "Swap: fichero ${file_mb} MB presente (≥${SWAP_MIN_FILE_MB}); sin swapoff"
     return 0
   fi
 

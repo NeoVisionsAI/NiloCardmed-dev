@@ -339,6 +339,32 @@ ensure_host_always_on() {
   bash "${script}" || log_warn "ensure-host-always-on falló — revisa permisos root"
 }
 
+# Solo quita el dropin lightdm roto (seguro en cada update.sh).
+ensure_host_lightdm_fix_only() {
+  local install_dir="${1:-${INSTALL_DIR:-}}"
+
+  if [[ "${EUID}" -ne 0 ]]; then
+    return 0
+  fi
+
+  local script=""
+  for candidate in \
+    "${install_dir}/scripts/ensure-host-always-on.sh" \
+    "${REPO_ROOT:-}/scripts/ensure-host-always-on.sh" \
+    "${SCRIPT_DIR:-}/ensure-host-always-on.sh"; do
+    if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+      script="${candidate}"
+      break
+    fi
+  done
+
+  if [[ -z "${script}" ]]; then
+    return 0
+  fi
+
+  NILOCARDMED_HOST_TUNING_LIGHT=true bash "${script}" || true
+}
+
 # Swap mínima 1 GB en /var/swap si la Pi trae poca (Pi Zero 2 W). Ver docs/INCREASE_SWAP.md
 ensure_host_swap() {
   local install_dir="${1:-${INSTALL_DIR:-}}"

@@ -17,7 +17,7 @@ Cuando esto ocurre:
 
 Para que el agente de despliegue automatice la configuración la primera vez que se inicie el sistema, se debe incluir un script o tarea de aprovisionamiento que verifique el tamaño de la Swap actual y, si es menor a **1024 MB**, la reconfigure automáticamente a 1 GB.
 
-> **Automatizado en NiloCardmed:** `sudo ./scripts/install.sh` y `sudo ./scripts/update.sh` ejecutan `scripts/ensure-host-swap.sh` (requiere root). Si la swap total ya es ≥ 1024 MB, no hace nada.
+> **Automatizado en NiloCardmed:** `sudo ./scripts/install.sh` (primera vez). **`update.sh` no toca swap** en caliente (evita colgar SSH en Pi Zero 2 W).
 
 > **Nota:** No se recomienda asignar más de 1 GB de Swap en tarjetas MicroSD para evitar degradación prematura por ciclos de escritura y ralentizaciones severas de I/O.
 
@@ -25,7 +25,9 @@ Variables opcionales:
 
 | Variable | Default | Descripción |
 |----------|---------|-------------|
-| `NILOCARDMED_SWAP_SIZE_MB` | `1024` | Tamaño objetivo |
+| `NILOCARDMED_SWAP_SIZE_MB` | `1024` | Tamaño objetivo al crear el fichero |
+| `NILOCARDMED_SWAP_MIN_REPORTED_MB` | `1000` | Si `free -m` ≥ esto y existe `/var/swap`, no se recrea |
+| `NILOCARDMED_SWAP_MIN_FILE_MB` | `1000` | Si el fichero ≥ esto (p. ej. 1023–1024), no se vuelve a hacer `dd` |
 | `NILOCARDMED_SWAP_FILE` | `/var/swap` | Ruta del archivo swap |
 | `DISABLE_GUI` | `false` | Sin escritorio; arranque consola (`deploy.env`) |
 | `OPTIMIZE_GPU_MEM` | `true` | `gpu_mem=16` **solo si** `DISABLE_GUI=true` (con escritorio no se aplica) |

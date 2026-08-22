@@ -20,10 +20,13 @@ for arg in "$@"; do
     --build) BUILD=true ;;
     -h | --help)
       cat <<'EOF'
-Uso: sudo ./scripts/update.sh [--build]
+  Uso: sudo ./scripts/update.sh [--build]
 
   (sin flags)   rsync a /opt/nilocardmed, override compose, Bluetooth host, reinicia servicio
   --build       además reconstruye imagen Docker (usa caché; capas pip cacheadas)
+
+  No ejecuta swap/always-on/gpu en caliente (evita colgar SSH/escritorio en Pi Zero 2 W).
+  Primera instalación: sudo ./scripts/install.sh (sí aplica tuning de host).
 
 Incluye scripts/ensure-bluetooth-powered.sh (BlueZ Experimental, discoverable, alias).
 EOF
@@ -32,7 +35,7 @@ EOF
   esac
 done
 
-args=(--skip-host-deps)
+args=(--skip-host-deps --skip-host-tuning)
 if [[ "${BUILD}" != true ]]; then
   args+=(--skip-build)
 fi

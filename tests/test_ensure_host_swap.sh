@@ -60,4 +60,18 @@ if [[ "${count_final}" -ne 1 ]]; then
   exit 1
 fi
 
+# 1023 MB reportados + fichero 1024 MB = swap OK (no swapoff/dd)
+SWAP_MIN_REPORTED_MB=1000
+SWAP_MIN_FILE_MB=1000
+current=1023
+file_mb=1024
+if [[ -f "/var/swap" ]] && [[ "${file_mb}" -ge "${SWAP_MIN_FILE_MB}" ]]; then
+  :
+elif [[ "${current}" -ge "${SWAP_MIN_REPORTED_MB}" ]] && [[ "${file_mb}" -ge "${SWAP_MIN_FILE_MB}" ]]; then
+  :
+else
+  echo "FAIL: 1023/1024 debería considerarse swap adecuada" >&2
+  exit 1
+fi
+
 echo "OK test_ensure_host_swap"

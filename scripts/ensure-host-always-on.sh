@@ -239,6 +239,13 @@ main() {
 
   RESTORE_LIGHTDM_AFTER=0
 
+  if is_true "${NILOCARDMED_HOST_TUNING_LIGHT:-false}"; then
+    log_info "=== Host tuning ligero (solo lightdm obsoleto) ==="
+    remove_lightdm_xserver_dropin
+    restore_lightdm_session_if_needed
+    return 0
+  fi
+
   log_info "=== Host always-on (sin suspender / blanking / pantalla negra) ==="
   remove_lightdm_xserver_dropin
   write_logind_dropin

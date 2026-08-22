@@ -22,10 +22,12 @@ source "${SCRIPT_DIR}/lib/common.sh"
 
 SKIP_HOST_DEPS=false
 SKIP_BUILD=false
+SKIP_HOST_TUNING=false
 for arg in "$@"; do
   case "${arg}" in
     --skip-host-deps) SKIP_HOST_DEPS=true ;;
     --skip-build) SKIP_BUILD=true ;;
+    --skip-host-tuning) SKIP_HOST_TUNING=true ;;
     -h | --help)
       cat <<'EOF'
 Uso: sudo ./scripts/install.sh [opciones]
@@ -40,6 +42,7 @@ Instalación completa para fábrica (repetible en N dispositivos):
 Opciones:
   --skip-host-deps   Omitir apt/Docker (solo aplicación)
   --skip-build       No reconstruir imagen (usa la existente; ideal tras cambios de código)
+  --skip-host-tuning Omitir swap/always-on/gpu en caliente (update.sh lo usa por defecto)
   -h, --help         Esta ayuda
 
 Variables:
@@ -59,6 +62,7 @@ EOF
 done
 export SKIP_HOST_DEPS
 export SKIP_BUILD
+export SKIP_HOST_TUNING
 
 if [[ "${EUID}" -ne 0 ]]; then
   log_error "Ejecuta este script como root (sudo)."
@@ -103,9 +107,14 @@ load_deploy_env
 ensure_run_user_groups "${NILOCARDMED_RUN_USER}"
 ensure_host_directories
 
-ensure_host_always_on "${INSTALL_DIR}"
-ensure_host_swap "${INSTALL_DIR}"
-ensure_host_memory_optimize "${INSTALL_DIR}"
+if is_true "${SKIP_HOST_TUNING:-false}"; then
+  log_info "=== Host tuning omitido (--skip-host-tuning / update.sh) ==="
+  ensure_host_lightdm_fix_only "${INSTALL_DIR}"
+else
+  ensure_host_always_on "${INSTALL_DIR}"
+  ensure_host_swap "${INSTALL_DIR}"
+  ensure_host_memory_optimize "${INSTALL_DIR}"
+fi
 
 # --- 6. Compose override (hot-plug cámara, BLE, WiFi) ---
 INSTALL_DIR="${INSTALL_DIR}" DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE}" \
@@ -167,8 +176,10 @@ if ! verify_service_and_container; then
   exit 1
 fi
 
-log_info "=== Restaurar escritorio tras build (lightdm) ==="
-NILOCARDMED_RESTORE_DESKTOP_AFTER=always ensure_host_always_on "${INSTALL_DIR}"
+if ! is_true "${SKIP_HOST_TUNING:-false}"; then
+  log_info "=== Restaurar escritorio tras build (lightdm) ==="
+  NILOCARDMED_RESTORE_DESKTOP_AFTER=always ensure_host_always_on "${INSTALL_DIR}"
+fi
 
 log_info ""
 log_info "=== Instalación completada ==="
