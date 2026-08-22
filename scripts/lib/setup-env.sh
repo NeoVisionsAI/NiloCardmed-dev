@@ -56,7 +56,7 @@ generate_device_uuid() {
   fi
 }
 
-generate_bluetooth_password() {
+generate_connection_password() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 8
   else
@@ -93,9 +93,90 @@ read_secret_from_tty() {
   return "${rc}"
 }
 
-has_existing_bluetooth_password() {
+has_existing_connection_password() {
   local existing="$1"
   [[ -n "${existing}" && "${existing}" != "changeme" ]]
+}
+
+read_existing_connection_password() {
+  local env_file="$1"
+  local existing=""
+  existing="$(read_env_value "${env_file}" "NILOCARDMED_CONNECTION_PASSWORD" || true)"
+  if has_existing_connection_password "${existing}"; then
+    echo "${existing}"
+    return 0
+  fi
+  existing="$(read_env_value "${env_file}" "NILOCARDMED_BLUETOOTH__PASSWORD" || true)"
+  if has_existing_connection_password "${existing}"; then
+    echo "${existing}"
+    return 0
+  fi
+  return 1
+}
+
+prompt_connection_password() {
+  local env_file="$1"
+  local existing=""
+  existing="$(read_existing_connection_password "${env_file}" || true)"
+
+  local password=""
+  local confirm=""
+  if [[ -t 0 ]] || [[ -r /dev/tty ]]; then
+    if has_existing_connection_password "${existing}"; then
+      read_secret_from_tty \
+        "Contraseña de aprovisionamiento [Enter=mantener; 10 s sin entrada=mantener]: " \
+        10 \
+        password || true
+      if [[ -z "${password}" ]]; then
+        password="${existing}"
+        log_info "Contraseña de aprovisionamiento: se mantiene la existente"
+        export CONNECTION_PASSWORD="${password}"
+        return 0
+      fi
+    else
+      read_secret_from_tty \
+        "Contraseña de aprovisionamiento [obligatoria la primera vez]: " \
+        0 \
+        password || true
+      if [[ -z "${password}" ]]; then
+        log_error "La contraseña de aprovisionamiento es obligatoria en la primera instalación."
+        while [[ -z "${password}" ]]; do
+          read_secret_from_tty "Contraseña de aprovisionamiento: " 0 password || true
+          if [[ -z "${password}" ]]; then
+            log_error "La contraseña no puede estar vacía."
+          fi
+        done
+      fi
+    fi
+
+    while true; do
+      read_secret_from_tty "Repite la contraseña de aprovisionamiento: " 0 confirm || true
+      if [[ "${password}" == "${confirm}" ]]; then
+        break
+      fi
+      log_error "Las contraseñas no coinciden. Vuelve a intentarlo."
+      password=""
+      while [[ -z "${password}" ]]; do
+        read_secret_from_tty "Contraseña de aprovisionamiento: " 0 password || true
+        if [[ -z "${password}" ]]; then
+          log_error "La contraseña no puede estar vacía."
+        fi
+      done
+    done
+  fi
+
+  if [[ -z "${password}" ]]; then
+    if has_existing_connection_password "${existing}"; then
+      password="${existing}"
+      log_info "Contraseña de aprovisionamiento: se mantiene la existente (sin TTY)"
+    else
+      password="$(generate_connection_password)"
+      log_info "Contraseña de aprovisionamiento generada: ${password}"
+      log_info "Guárdala: la necesitarás en la app tablet (auth HTTP)."
+    fi
+  fi
+
+  export CONNECTION_PASSWORD="${password}"
 }
 
 load_or_create_device_identity() {
@@ -129,71 +210,6 @@ EOF
   export DEVICE_UUID BLE_DEVICE_NAME
 }
 
-prompt_bluetooth_password() {
-  local env_file="$1"
-  local existing=""
-  existing="$(read_env_value "${env_file}" "NILOCARDMED_BLUETOOTH__PASSWORD" || true)"
-
-  local password=""
-  local confirm=""
-  if [[ -t 0 ]] || [[ -r /dev/tty ]]; then
-    if has_existing_bluetooth_password "${existing}"; then
-      read_secret_from_tty \
-        "Contraseña Bluetooth [Enter=mantener la actual; 10 s sin entrada=mantener]: " \
-        10 \
-        password || true
-      if [[ -z "${password}" ]]; then
-        password="${existing}"
-        log_info "Contraseña Bluetooth: se mantiene la existente"
-        export BLUETOOTH_PASSWORD="${password}"
-        return 0
-      fi
-    else
-      read_secret_from_tty \
-        "Contraseña Bluetooth [obligatoria la primera vez]: " \
-        0 \
-        password || true
-      if [[ -z "${password}" ]]; then
-        log_error "La contraseña Bluetooth es obligatoria en la primera instalación."
-        while [[ -z "${password}" ]]; do
-          read_secret_from_tty "Contraseña Bluetooth: " 0 password || true
-          if [[ -z "${password}" ]]; then
-            log_error "La contraseña no puede estar vacía."
-          fi
-        done
-      fi
-    fi
-
-    while true; do
-      read_secret_from_tty "Repite la contraseña Bluetooth: " 0 confirm || true
-      if [[ "${password}" == "${confirm}" ]]; then
-        break
-      fi
-      log_error "Las contraseñas no coinciden. Vuelve a intentarlo."
-      password=""
-      while [[ -z "${password}" ]]; do
-        read_secret_from_tty "Contraseña Bluetooth: " 0 password || true
-        if [[ -z "${password}" ]]; then
-          log_error "La contraseña no puede estar vacía."
-        fi
-      done
-    done
-  fi
-
-  if [[ -z "${password}" ]]; then
-    if has_existing_bluetooth_password "${existing}"; then
-      password="${existing}"
-      log_info "Contraseña Bluetooth: se mantiene la existente (sin TTY)"
-    else
-      password="$(generate_bluetooth_password)"
-      log_info "Contraseña Bluetooth generada: ${password}"
-      log_info "Guárdala: la necesitarás en la app tablet."
-    fi
-  fi
-
-  export BLUETOOTH_PASSWORD="${password}"
-}
-
 sync_deploy_run_user() {
   local deploy_file="$1"
   local current_user current_group
@@ -216,7 +232,9 @@ ensure_deploy_production_flags() {
   local deploy_file="$1"
 
   update_env_file "${deploy_file}" "ENABLE_WIFI" "true"
-  update_env_file "${deploy_file}" "ENABLE_BLUETOOTH" "true"
+  update_env_file "${deploy_file}" "ENABLE_BLUETOOTH" "false"
+  update_env_file "${deploy_file}" "BLUETOOTH_ENABLED" "false"
+  update_env_file "${deploy_file}" "ENABLE_WIFI_AP" "true"
   update_env_file "${deploy_file}" "ENABLE_CAMERA_HOTPLUG" "true"
   update_env_file "${deploy_file}" "MOUNT_USB_BUS" "true"
   update_env_file "${deploy_file}" "VIDEO_DEVICE_REQUIRED" "false"
@@ -228,7 +246,7 @@ ensure_deploy_production_flags() {
     update_env_file "${deploy_file}" "DOCKER_COMPOSE_CMD" "${docker_bin} compose"
   fi
 
-  log_info "deploy.env: flags de producción aplicados (WiFi, BLE, hot-plug cámara)"
+  log_info "deploy.env: flags de producción aplicados (WiFi AP, HTTP local; BLE legacy off)"
   if [[ -z "$(read_env_value "${deploy_file}" "DISABLE_GUI" || true)" ]]; then
     update_env_file "${deploy_file}" "DISABLE_GUI" "false"
   fi
@@ -240,10 +258,11 @@ ensure_deploy_production_flags() {
 ensure_app_production_flags() {
   local env_file="$1"
 
-  update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__ENABLED" "true"
+  update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__ENABLED" "false"
   update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__BACKEND" "bluez"
   update_env_file "${env_file}" "NILOCARDMED_WIFI__ENABLED" "true"
-  log_info ".env: BLE backend=bluez, WiFi habilitado"
+  update_env_file "${env_file}" "NILOCARDMED_HTTP__ENABLED" "true"
+  log_info ".env: WiFi + HTTP local habilitados; BLE desactivado (código conservado)"
 }
 
 migrate_deploy_service_name_var() {
@@ -377,18 +396,18 @@ setup_deploy_and_app_env() {
   fi
 
   load_or_create_device_identity "${data_dir}"
-  prompt_bluetooth_password "${env_file}"
+  prompt_connection_password "${env_file}"
 
   update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__DEVICE_NAME" "${BLE_DEVICE_NAME}"
-  update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__PASSWORD" "${BLUETOOTH_PASSWORD}"
+  update_env_file "${env_file}" "NILOCARDMED_CONNECTION_PASSWORD" "${CONNECTION_PASSWORD}"
   update_env_file "${env_file}" "NILOCARDMED_SER__DEVICE_ID" "${DEVICE_UUID}"
   ensure_app_production_flags "${env_file}"
   normalize_env_list_values "${env_file}"
 
   log_info "Configuración aplicada:"
   log_info "  device_id (SER)=${DEVICE_UUID}"
-  log_info "  BLE device_name=${BLE_DEVICE_NAME}"
-  log_info "  BLE password=(configurada en .env)"
+  log_info "  device_name=${BLE_DEVICE_NAME}"
+  log_info "  connection_password=(configurada en .env como NILOCARDMED_CONNECTION_PASSWORD)"
   if [[ "${EUID}" -eq 0 ]]; then
     ensure_install_dir_permissions "${install_dir}"
   fi

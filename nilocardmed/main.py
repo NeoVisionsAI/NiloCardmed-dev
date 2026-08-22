@@ -23,6 +23,7 @@ from nilocardmed.wifi.service import WifiService
 from nilocardmed.bluetooth.cli import run_bluetooth_cli
 from nilocardmed.bluetooth.service import BluetoothService
 from nilocardmed.bluetooth.supervisor import BluetoothSupervisor
+from nilocardmed.http.server import HttpProvisioningService
 from nilocardmed.cardmed.cli import run_cardmed_cli
 from nilocardmed.resilience.cli import run_health_cli
 from nilocardmed.resilience.supervisor import ResilienceSupervisor
@@ -161,6 +162,23 @@ def run_daemon() -> int:
     else:
         logger.info("Bluetooth deshabilitado")
 
+    http_service: HttpProvisioningService | None = None
+    if config.http.enabled:
+        http_service = HttpProvisioningService(
+            config.http,
+            config_manager,
+            env,
+            config.bluetooth,
+        )
+        http_service.start(shutdown)
+        logger.info(
+            "Servidor HTTP de aprovisionamiento activo (puerto=%s, ap_ip=%s)",
+            config.http.port,
+            config.http.ap_ip if config.http.bind_ap_only else config.http.host,
+        )
+    else:
+        logger.info("HTTP de aprovisionamiento deshabilitado")
+
     while not shutdown.is_set():
         shutdown.wait(timeout=1)
 
@@ -183,6 +201,9 @@ def run_daemon() -> int:
 
     if bluetooth_service is not None:
         bluetooth_service.stop(shutdown)
+
+    if http_service is not None:
+        http_service.stop()
 
     logger.info("NiloCardmed detenido correctamente")
     return 0

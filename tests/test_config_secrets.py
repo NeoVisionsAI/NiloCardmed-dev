@@ -79,9 +79,17 @@ def test_apply_to_overrides_secrets_password_from_env(monkeypatch, tmp_path: Pat
     )
     (tmp_path / "config.json").write_text("{}", encoding="utf-8")
 
-    monkeypatch.setenv("NILOCARDMED_BLUETOOTH__PASSWORD", "cardmed")
+    monkeypatch.setenv("NILOCARDMED_CONNECTION_PASSWORD", "cardmed")
     env = EnvironmentSettings().model_copy(update={"data_dir": tmp_path})
 
     config = ConfigManager(env).load()
 
     assert config.bluetooth.password.get_secret_value() == "cardmed"
+
+
+def test_connection_password_fallback_from_legacy_bluetooth_env(monkeypatch, tmp_path: Path):
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NILOCARDMED_BLUETOOTH__PASSWORD", "legacy-pwd")
+    env = EnvironmentSettings().model_copy(update={"data_dir": tmp_path})
+    config = ConfigManager(env).load()
+    assert config.bluetooth.password.get_secret_value() == "legacy-pwd"

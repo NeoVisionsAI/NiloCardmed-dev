@@ -536,6 +536,22 @@ class CameraSettings(BaseModel):
     capture_retry_delay_seconds: float = Field(default=2.0, ge=0.5, le=15.0)
 
 
+class HttpSettings(BaseModel):
+    """Servidor HTTP local de aprovisionamiento (WiFi AP)."""
+
+    enabled: bool = True
+    host: str = "0.0.0.0"
+    port: int = Field(default=8080, ge=1, le=65535)
+    bind_ap_only: bool = Field(
+        default=True,
+        description="Enlazar solo a la IP del AP (192.168.4.1) para aislar el servicio",
+    )
+    ap_interface: str = "uap0"
+    ap_ip: str = "192.168.4.1"
+    device_label: str = "Nilocardmed"
+    cors_allow_origin: str = "*"
+
+
 class AppConfig(BaseModel):
     """Configuración completa persistida en disco."""
 
@@ -547,6 +563,7 @@ class AppConfig(BaseModel):
     resilience: ResilienceSettings = Field(default_factory=ResilienceSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     camera: CameraSettings = Field(default_factory=CameraSettings)
+    http: HttpSettings = Field(default_factory=HttpSettings)
 
 
 class EnvironmentSettings(BaseSettings):
@@ -564,6 +581,10 @@ class EnvironmentSettings(BaseSettings):
     log_level: str = "INFO"
     log_structured: bool = True
     config_filename: str = "config.json"
+    connection_password: SecretStr | None = Field(
+        default=None,
+        description="Contraseña de aprovisionamiento (HTTP WiFi AP y BLE legacy)",
+    )
 
     ser: SerSettings = Field(default_factory=SerSettings)
     wifi: WifiSettings = Field(default_factory=WifiSettings)
@@ -573,6 +594,7 @@ class EnvironmentSettings(BaseSettings):
     resilience: ResilienceSettings = Field(default_factory=ResilienceSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     camera: CameraSettings = Field(default_factory=CameraSettings)
+    http: HttpSettings = Field(default_factory=HttpSettings)
 
     @property
     def config_path(self) -> Path:
@@ -597,6 +619,7 @@ class EnvironmentSettings(BaseSettings):
             "resilience",
             "storage",
             "camera",
+            "http",
         ):
             section_env = getattr(self, section_name)
             section_merged = getattr(merged, section_name)
@@ -608,6 +631,10 @@ class EnvironmentSettings(BaseSettings):
                     default_value
                 ):
                     setattr(section_merged, field_name, env_value)
+        if self.connection_password is not None:
+            pwd = self.connection_password.get_secret_value()
+            if pwd:
+                merged.bluetooth.password = self.connection_password
         return merged
 
     def public_summary(self) -> dict[str, Any]:
@@ -631,6 +658,8 @@ class EnvironmentSettings(BaseSettings):
             "bluetooth_name": self.bluetooth.device_name,
             "bluetooth_enabled": self.bluetooth.enabled,
             "bluetooth_backend": self.bluetooth.backend,
+            "http_enabled": self.http.enabled,
+            "http_port": self.http.port,
             "camera_device": self.camera.device_path,
             "camera_backend": self.camera.backend,
         }

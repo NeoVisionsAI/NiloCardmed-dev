@@ -17,6 +17,9 @@ HOST_APT_PACKAGES=(
   bluez
   dbus
   network-manager
+  hostapd
+  dnsmasq
+  iw
   v4l-utils
   git
 )
@@ -207,9 +210,21 @@ ensure_run_user_groups() {
 ensure_system_services() {
   log_info "=== Servicios del sistema ==="
 
-  ensure_bluezero_dbus_policy
-  ensure_bluez_experimental
-  ensure_bluez_auto_enable
+  if [[ -f "${INSTALL_DIR:-}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${INSTALL_DIR}/deploy.env" && set +a
+  elif [[ -f "${REPO_ROOT:-}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${REPO_ROOT}/deploy.env" && set +a
+  fi
+
+  if resolve_bluetooth_enabled; then
+    ensure_bluezero_dbus_policy
+    ensure_bluez_experimental
+    ensure_bluez_auto_enable
+  else
+    log_info "Bluetooth deshabilitado — omitiendo configuración BlueZ/GATT en host"
+  fi
 
   systemctl enable dbus.service 2>/dev/null || true
   systemctl start dbus.service 2>/dev/null || true
@@ -217,13 +232,21 @@ ensure_system_services() {
   systemctl enable docker.service
   systemctl start docker.service
 
-  if systemctl list-unit-files bluetooth.service >/dev/null 2>&1; then
-    systemctl enable bluetooth.service
-    systemctl start bluetooth.service
-    log_info "Bluetooth (bluez) activado"
-    ensure_bluetooth_powered || true
+  if resolve_bluetooth_enabled; then
+    if systemctl list-unit-files bluetooth.service >/dev/null 2>&1; then
+      systemctl enable bluetooth.service
+      systemctl start bluetooth.service
+      log_info "Bluetooth (bluez) activado"
+      ensure_bluetooth_powered || true
+    else
+      log_warn "Servicio bluetooth.service no encontrado"
+    fi
   else
-    log_warn "Servicio bluetooth.service no encontrado"
+    if systemctl list-unit-files bluetooth.service >/dev/null 2>&1; then
+      systemctl stop bluetooth.service 2>/dev/null || true
+      systemctl disable bluetooth.service 2>/dev/null || true
+      log_info "Bluetooth (bluez) detenido y deshabilitado en el host"
+    fi
   fi
 
   if systemctl list-unit-files NetworkManager.service >/dev/null 2>&1; then
@@ -328,9 +351,11 @@ install_host_dependencies() {
   if is_true "${SKIP_HOST_DEPS:-false}"; then
     log_info "SKIP_HOST_DEPS=true — omitiendo instalación de paquetes del host"
     ensure_run_user_groups "${run_user}"
-    ensure_bluez_experimental
-    ensure_bluez_auto_enable
-    ensure_bluetooth_powered || true
+    if resolve_bluetooth_enabled; then
+      ensure_bluez_experimental
+      ensure_bluez_auto_enable
+      ensure_bluetooth_powered || true
+    fi
     verify_host_ready
     return 0
   fi

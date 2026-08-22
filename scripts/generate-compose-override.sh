@@ -57,7 +57,7 @@ else
   fi
 fi
 
-if is_true "${ENABLE_BLUETOOTH:-false}"; then
+if is_true "${ENABLE_BLUETOOTH:-false}" || is_true "${BLUETOOTH_ENABLED:-false}"; then
   dbus_path="${BLUETOOTH_DBUS_SYSTEM_PATH:-/var/run/dbus/system_bus_socket}"
   volumes+=("${dbus_path}:/var/run/dbus/system_bus_socket:ro")
 fi
@@ -80,7 +80,7 @@ else
   log_warn "Grupo ${primary_group} no disponible; omitiendo group_add para cámara"
 fi
 
-if is_true "${ENABLE_BLUETOOTH:-false}"; then
+if is_true "${ENABLE_BLUETOOTH:-false}" || is_true "${BLUETOOTH_ENABLED:-false}"; then
   bt_gid=""
   if bt_gid="$(resolve_host_group_gid bluetooth)"; then
     extra_group_gids+=("${bt_gid}")
@@ -127,7 +127,10 @@ fi
     done
   fi
 
-  if is_true "${ENABLE_WIFI:-false}" || is_true "${ENABLE_BLUETOOTH:-false}"; then
+  if is_true "${ENABLE_WIFI:-false}" \
+    || is_true "${ENABLE_BLUETOOTH:-false}" \
+    || is_true "${BLUETOOTH_ENABLED:-false}" \
+    || is_true "${ENABLE_WIFI_AP:-false}"; then
     echo "    network_mode: host"
   fi
 } > "${tmp_file}"

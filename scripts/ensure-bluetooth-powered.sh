@@ -13,6 +13,22 @@ read_env_value() {
   grep -E "^${key}=" "${file}" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || return 1
 }
 
+deploy_bluetooth_enabled() {
+  local deploy_file="${INSTALL_DIR}/deploy.env"
+  if [[ -f "${deploy_file}" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${deploy_file}" && set +a
+  fi
+  case "${BLUETOOTH_ENABLED:-false}" in 1 | true | yes | on) return 0 ;; esac
+  case "${ENABLE_BLUETOOTH:-false}" in 1 | true | yes | on) return 0 ;; esac
+  return 1
+}
+
+if ! deploy_bluetooth_enabled; then
+  echo "[nilocardmed] Bluetooth deshabilitado — omitiendo ensure-bluetooth-powered"
+  exit 0
+fi
+
 ensure_bluez_experimental() {
   local conf="/etc/bluetooth/main.conf"
   [[ -f "${conf}" ]] || return 0

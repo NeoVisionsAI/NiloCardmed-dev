@@ -21,6 +21,25 @@ is_true() {
   esac
 }
 
+# BLUETOOTH_ENABLED (alias) o ENABLE_BLUETOOTH (deploy.env legacy).
+# Con ENABLE_WIFI_AP=true el BLE queda off (ahorro RAM/CPU en Pi Zero 2 W).
+resolve_bluetooth_enabled() {
+  if resolve_wifi_ap_enabled; then
+    return 1
+  fi
+  if is_true "${BLUETOOTH_ENABLED:-}"; then
+    return 0
+  fi
+  if is_true "${ENABLE_BLUETOOTH:-false}"; then
+    return 0
+  fi
+  return 1
+}
+
+resolve_wifi_ap_enabled() {
+  is_true "${ENABLE_WIFI_AP:-false}"
+}
+
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     log_error "Comando requerido no encontrado: $1"
@@ -291,8 +310,8 @@ ensure_bluetooth_host_ready() {
     set -a && source "${install_dir}/deploy.env" && set +a
   fi
 
-  if ! is_true "${ENABLE_BLUETOOTH:-false}"; then
-    log_info "ENABLE_BLUETOOTH=false — omitiendo ensure-bluetooth-powered"
+  if ! resolve_bluetooth_enabled; then
+    log_info "Bluetooth deshabilitado (BLUETOOTH_ENABLED/ENABLE_BLUETOOTH=false) — omitiendo ensure-bluetooth-powered"
     return 0
   fi
 
@@ -433,4 +452,66 @@ ensure_host_memory_optimize() {
   fi
 
   bash "${script}" || log_warn "ensure-host-memory-optimize falló"
+}
+
+# Punto de acceso WiFi concurrente (uap0 + hostapd + dnsmasq). Requiere root.
+ensure_wifi_ap_host_ready() {
+  local install_dir="${1:-${INSTALL_DIR:-}}"
+
+  if [[ -z "${install_dir}" ]]; then
+    log_warn "ensure_wifi_ap_host_ready: INSTALL_DIR no definido"
+    return 0
+  fi
+
+  if [[ -f "${install_dir}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${install_dir}/deploy.env" && set +a
+  fi
+
+  if ! resolve_wifi_ap_enabled; then
+    log_info "ENABLE_WIFI_AP=false — omitiendo AP WiFi de aprovisionamiento"
+    return 0
+  fi
+
+  local script="${install_dir}/scripts/ensure-wifi-ap.sh"
+  if [[ ! -f "${script}" ]]; then
+    log_warn "No encontrado: ${script}"
+    return 0
+  fi
+
+  log_info "=== WiFi AP concurrente (Nilocardmed-Config, 192.168.4.1) ==="
+  INSTALL_DIR="${install_dir}"   bash "${script}" || log_warn "ensure-wifi-ap falló — revisa hostapd/dnsmasq"
+}
+
+# Apaga BlueZ/rfkill cuando el aprovisionamiento es por WiFi AP (ahorro memoria).
+ensure_bluetooth_disabled_for_wifi_ap() {
+  local install_dir="${1:-${INSTALL_DIR:-}}"
+
+  if [[ -f "${install_dir}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${install_dir}/deploy.env" && set +a
+  fi
+
+  if ! resolve_wifi_ap_enabled; then
+    return 0
+  fi
+
+  if [[ "${EUID}" -ne 0 ]]; then
+    return 0
+  fi
+
+  log_info "=== Bluetooth off (modo WiFi AP activo — ahorro RAM/CPU) ==="
+
+  if systemctl list-unit-files bluetooth.service >/dev/null 2>&1; then
+    systemctl stop bluetooth.service 2>/dev/null || true
+    systemctl disable bluetooth.service 2>/dev/null || true
+  fi
+
+  if command -v rfkill >/dev/null 2>&1; then
+    rfkill block bluetooth 2>/dev/null || true
+  fi
+
+  if command -v bluetoothctl >/dev/null 2>&1; then
+    bluetoothctl power off 2>/dev/null || true
+  fi
 }

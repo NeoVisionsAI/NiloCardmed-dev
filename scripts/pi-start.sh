@@ -172,8 +172,8 @@ run_checks() {
 
   if [[ -f "${INSTALL_DIR}/.env" ]]; then
     check_ok ".env presente"
-    if grep -qE '^NILOCARDMED_BLUETOOTH__PASSWORD=changeme' "${INSTALL_DIR}/.env" 2>/dev/null; then
-      check_warn "Contraseña BLE sigue siendo 'changeme' — cámbiala antes de producción"
+    if grep -qE '^NILOCARDMED_CONNECTION_PASSWORD=changeme' "${INSTALL_DIR}/.env" 2>/dev/null; then
+      check_warn "Contraseña de aprovisionamiento sigue siendo 'changeme' — cámbiala antes de producción"
     fi
     if ! grep -qE '^NILOCARDMED_SER__URL=.+' "${INSTALL_DIR}/.env" 2>/dev/null; then
       check_warn "NILOCARDMED_SER__URL no configurada en .env"
@@ -194,15 +194,27 @@ run_checks() {
     check_fail "No hay /var/run/dbus/system_bus_socket — BLE/WiFi en contenedor fallarán"
   fi
 
-  if is_true "${ENABLE_BLUETOOTH:-false}"; then
-    check_ok "ENABLE_BLUETOOTH=true en deploy.env"
+  if is_true "${ENABLE_WIFI_AP:-false}"; then
+    check_ok "ENABLE_WIFI_AP=true (aprovisionamiento por WiFi AP)"
+    if systemctl is-active --quiet nilocardmed-wifi-ap 2>/dev/null; then
+      check_ok "Servicio nilocardmed-wifi-ap activo"
+    else
+      check_warn "nilocardmed-wifi-ap no activo — sudo systemctl restart nilocardmed-wifi-ap"
+    fi
+    if systemctl is-active --quiet bluetooth 2>/dev/null; then
+      check_warn "Bluetooth host activo con WiFi AP — debería estar off (ahorro RAM)"
+    else
+      check_ok "Bluetooth host off (esperado con WiFi AP)"
+    fi
+  elif is_true "${ENABLE_BLUETOOTH:-false}" || is_true "${BLUETOOTH_ENABLED:-false}"; then
+    check_ok "Modo Bluetooth legacy habilitado"
     if systemctl is-active --quiet bluetooth 2>/dev/null || pgrep -x bluetoothd >/dev/null 2>&1; then
       check_ok "Servicio bluetooth del host activo"
     else
-      check_warn "Servicio bluetooth del host no detectado — prueba: sudo systemctl enable --now bluetooth"
+      check_warn "Servicio bluetooth del host no detectado"
     fi
   else
-    check_fail "ENABLE_BLUETOOTH=false — pon ENABLE_BLUETOOTH=true en deploy.env (configuración por tablet)"
+    check_warn "Ni ENABLE_WIFI_AP ni BLE activos — revisa deploy.env"
   fi
 
   if is_true "${ENABLE_WIFI:-false}"; then
@@ -213,7 +225,7 @@ run_checks() {
       check_warn "nmcli no encontrado — instala NetworkManager para WiFi desde la app"
     fi
   else
-    check_fail "ENABLE_WIFI=false — pon ENABLE_WIFI=true en deploy.env (WiFi se configura luego por BLE)"
+    check_fail "ENABLE_WIFI=false — pon ENABLE_WIFI=true en deploy.env (WiFi STA + AP)"
   fi
 
   local data_dir="${HOST_DATA_DIR:-/var/lib/nilocardmed/data}"
@@ -245,7 +257,9 @@ ensure_deploy_flags() {
   local changed=false
 
   for key_val in \
-    "ENABLE_BLUETOOTH=true" \
+    "ENABLE_BLUETOOTH=false" \
+    "BLUETOOTH_ENABLED=false" \
+    "ENABLE_WIFI_AP=true" \
     "ENABLE_WIFI=true" \
     "MOUNT_USB_BUS=true" \
     "DOCKER_DEFAULT_PLATFORM=linux/arm/v7"; do
@@ -326,7 +340,7 @@ start_stack() {
   log_info ""
   log_info "=== NiloCardmed arrancado ==="
   log_info "BLE: escanea '${NILOCARDMED_DEVICE_NAME:-NiloCardmed}' desde la tablet"
-  log_info "Contraseña BLE: la de NILOCARDMED_BLUETOOTH__PASSWORD en .env"
+  log_info "Contraseña aprovisionamiento: NILOCARDMED_CONNECTION_PASSWORD en .env"
   log_info "Logs: ./scripts/pi-start.sh logs"
   log_info "Estado: ./scripts/pi-start.sh status"
 }
