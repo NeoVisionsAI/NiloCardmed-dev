@@ -138,23 +138,92 @@ migrate_legacy_connection_password() {
   fi
 }
 
+read_raw_connection_password() {
+  local env_file="$1"
+  local raw=""
+
+  raw="$(read_env_value "${env_file}" "NILOCARDMED_CONNECTION_PASSWORD" || true)"
+  if [[ -n "${raw}" ]]; then
+    echo "${raw}"
+    return 0
+  fi
+  raw="$(read_env_value "${env_file}" "NILOCARDMED_BLUETOOTH__PASSWORD" || true)"
+  if [[ -n "${raw}" ]]; then
+    echo "${raw}"
+    return 0
+  fi
+  return 1
+}
+
+report_invalid_connection_password() {
+  local pwd="$1"
+
+  if [[ -z "${pwd}" ]]; then
+    echo "[nilocardmed][ERROR] La contraseña no puede estar vacía." >/dev/tty
+  elif [[ "${pwd}" == "changeme" ]]; then
+    echo "[nilocardmed][ERROR] 'changeme' no es válida; elige otra contraseña." >/dev/tty
+  elif [[ ${#pwd} -lt 8 ]]; then
+    echo "[nilocardmed][ERROR] Mínimo 8 caracteres (WPA2); has introducido ${#pwd}." >/dev/tty
+  elif [[ ${#pwd} -gt 63 ]]; then
+    echo "[nilocardmed][ERROR] Máximo 63 caracteres (WPA2)." >/dev/tty
+  else
+    echo "[nilocardmed][ERROR] Contraseña no válida para WPA2." >/dev/tty
+  fi
+}
+
+# Pide contraseña por TTY hasta que cumpla WPA2 (8-63, no changeme). Sin timeout.
+prompt_valid_password_from_tty() {
+  local prompt="$1"
+  local password=""
+
+  while ! connection_password_is_valid "${password}"; do
+    if [[ -n "${password}" ]]; then
+      report_invalid_connection_password "${password}"
+    fi
+    password=""
+    read_secret_from_tty "${prompt}" 0 password || true
+  done
+  echo "${password}"
+}
+
+confirm_connection_password_match() {
+  local __out_var="$1"
+  local password="$2"
+  local confirm=""
+
+  while true; do
+    read_secret_from_tty "Repite la contraseña: " 0 confirm || true
+    if [[ "${password}" == "${confirm}" ]]; then
+      printf -v "${__out_var}" '%s' "${password}"
+      return 0
+    fi
+    echo "[nilocardmed][ERROR] No coinciden. Vuelve a intentarlo." >/dev/tty
+    password="$(prompt_valid_password_from_tty "Contraseña: ")"
+  done
+}
+
 prompt_connection_password() {
   local env_file="$1"
-  local existing=""
-  existing="$(read_existing_connection_password "${env_file}" || true)"
-
+  local raw_existing valid_existing=""
   local password=""
-  local confirm=""
+  local kept_existing=false
+
+  raw_existing="$(read_raw_connection_password "${env_file}" || true)"
+  valid_existing="$(read_existing_connection_password "${env_file}" || true)"
 
   if [[ ! -r /dev/tty ]]; then
     log_warn "Sin TTY (/dev/tty) — no se puede pedir contraseña de forma interactiva"
-    if has_existing_connection_password "${existing}"; then
-      password="${existing}"
+    if connection_password_is_valid "${valid_existing}"; then
+      password="${valid_existing}"
       log_info "Contraseña de aprovisionamiento: se mantiene la existente (sin TTY)"
     else
       password="$(generate_connection_password)"
       log_info "Contraseña de aprovisionamiento generada: ${password}"
       log_info "Guárdala: WiFi AP + auth HTTP en la tablet."
+    fi
+    if ! connection_password_is_valid "${password}"; then
+      log_error "Contraseña inválida tras setup (8-63 caracteres, no 'changeme')"
+      return 1
     fi
     export CONNECTION_PASSWORD="${password}"
     return 0
@@ -163,50 +232,41 @@ prompt_connection_password() {
   echo "" >/dev/tty
   echo "[nilocardmed] === Contraseña de aprovisionamiento (WiFi AP + HTTP) ===" >/dev/tty
   echo "[nilocardmed] Usada para: WPA del AP Nilocardmed-Config-xxxx y comando auth HTTP." >/dev/tty
+  echo "[nilocardmed] Requisitos: 8-63 caracteres, distinta de 'changeme'." >/dev/tty
   echo "" >/dev/tty
 
-  if has_existing_connection_password "${existing}"; then
+  if connection_password_is_valid "${valid_existing}"; then
     read_secret_from_tty \
       "Nueva contraseña [Enter o espera 10 s = mantener la actual]: " \
       10 \
       password || true
     if [[ -z "${password}" ]]; then
-      password="${existing}"
+      password="${valid_existing}"
+      kept_existing=true
       echo "[nilocardmed] Contraseña: se mantiene la existente." >/dev/tty
-      export CONNECTION_PASSWORD="${password}"
-      return 0
+    elif ! connection_password_is_valid "${password}"; then
+      report_invalid_connection_password "${password}"
+      password="$(prompt_valid_password_from_tty "Contraseña aprovisionamiento [mín. 8 caracteres]: ")"
     fi
+  else
+    if [[ -n "${raw_existing}" ]]; then
+      echo "[nilocardmed] La contraseña guardada no vale para WPA2. Debes introducir una nueva (no hay opción de mantenerla)." >/dev/tty
+    fi
+    password="$(prompt_valid_password_from_tty "Contraseña aprovisionamiento [mín. 8 caracteres]: ")"
   fi
 
-  if [[ -n "${existing}" ]] && ! connection_password_is_valid "${existing}"; then
-    echo "[nilocardmed] La contraseña anterior no vale para WPA2 (mín. 8 caracteres). Introduce una nueva." >/dev/tty
+  if [[ "${kept_existing}" != true ]]; then
+    confirm_connection_password_match password "${password}"
+    echo "[nilocardmed] Contraseña de aprovisionamiento actualizada." >/dev/tty
   fi
 
-  while [[ -z "${password}" || ${#password} -lt 8 ]]; do
-    if [[ -n "${password}" && ${#password} -lt 8 ]]; then
-      echo "[nilocardmed][ERROR] Mínimo 8 caracteres (WPA2)." >/dev/tty
-      password=""
-    fi
-    read_secret_from_tty \
-      "Contraseña aprovisionamiento [mín. 8 caracteres]: " \
-      0 \
-      password || true
-  done
+  if ! connection_password_is_valid "${password}"; then
+    log_error "Contraseña inválida; no se continuará con la instalación/actualización."
+    return 1
+  fi
 
-  while true; do
-    read_secret_from_tty "Repite la contraseña: " 0 confirm || true
-    if [[ "${password}" == "${confirm}" ]]; then
-      break
-    fi
-    echo "[nilocardmed][ERROR] No coinciden. Vuelve a intentarlo." >/dev/tty
-    password=""
-    while [[ -z "${password}" || ${#password} -lt 8 ]]; do
-      read_secret_from_tty "Contraseña: " 0 password || true
-    done
-  done
-
-  echo "[nilocardmed] Contraseña de aprovisionamiento actualizada." >/dev/tty
   export CONNECTION_PASSWORD="${password}"
+  return 0
 }
 
 load_or_create_device_identity() {
@@ -445,7 +505,10 @@ setup_deploy_and_app_env() {
 
   load_or_create_device_identity "${data_dir}"
   migrate_legacy_connection_password "${env_file}"
-  prompt_connection_password "${env_file}"
+  if ! prompt_connection_password "${env_file}"; then
+    log_error "Actualización cancelada: contraseña WPA2 obligatoria (8-63 caracteres, no 'changeme')."
+    exit 1
+  fi
 
   if ! connection_password_is_valid "${CONNECTION_PASSWORD:-}"; then
     log_error "Contraseña inválida tras setup (8-63 caracteres, no 'changeme')"
