@@ -100,6 +100,7 @@ class BluezBluetoothBackend(BluetoothBackend):
         self._mainloop_tx_queue: queue.Queue[list[bytes]] = queue.Queue()
         self._mainloop_action_queue: queue.Queue[Callable[[], None]] = queue.Queue()
         self._last_le_advert_refresh_at: float = 0.0
+        self._gatt_client_connected: bool = False
 
     def start(self, shutdown: threading.Event) -> None:
         with self._lifecycle_lock:
@@ -231,7 +232,8 @@ class BluezBluetoothBackend(BluetoothBackend):
         return False
 
     def has_active_client(self) -> bool:
-        return self._tx_characteristic is not None
+        # GATT conectado != suscripción notify; el supervisor no debe refrescar anuncio entre ambos.
+        return self._gatt_client_connected or self._tx_characteristic is not None
 
     def is_publish_alive(self) -> bool:
         return self._publish_thread is not None and self._publish_thread.is_alive()
@@ -643,11 +645,22 @@ class BluezBluetoothBackend(BluetoothBackend):
         )
         self._peripheral = ble
 
+        def _handle_connect(*_args) -> None:
+            self._gatt_client_connected = True
+            logger.info("Cliente BLE conectado (GATT)")
+            trace_ble_client(event="conectado", detail="GATT link up")
+
         def _handle_disconnect(*_args) -> None:
+            self._gatt_client_connected = False
             self._tx_characteristic = None
             logger.info("Cliente BLE desconectado (adaptador)")
             trace_ble_client(event="desconectado", detail="desconexión del adaptador")
             self.request_advertising_refresh()
+
+        try:
+            ble.on_connect = _handle_connect
+        except Exception as exc:
+            logger.debug("on_connect no disponible: %s", exc)
 
         try:
             ble.on_disconnect = _handle_disconnect
@@ -722,6 +735,7 @@ class BluezBluetoothBackend(BluetoothBackend):
         return adapters[0]
 
     def _on_write(self, value, _options) -> None:
+        self._gatt_client_connected = True
         try:
             self._command_queue.put_nowait(bytes(value))
         except queue.Full:

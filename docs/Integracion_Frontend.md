@@ -123,6 +123,48 @@ await navigator.bluetooth.requestDevice({
 
 Si con `acceptAllDevices: true` **sí** sale `NiloCardmed-…`, el bug son los **`filters`** actuales de la app (casi siempre `services` o `name` exacto sin sufijo).
 
+#### Android: hay que abrir Ajustes → Bluetooth antes de que la app vea el dispositivo
+
+**Síntoma reportado en campo:** la PWA no muestra nada al pulsar «Buscar»; el usuario abre **Ajustes → Bluetooth** del tablet, ve `NiloCardmed-…` en la lista del sistema, vuelve a la app y **entonces** `requestDevice` sí funciona.
+
+**Causa:** no es que el Pi deje de anunciar. En Android, Web Bluetooth depende del stack BLE del SO; a veces el picker solo se puebla tras un escaneo iniciado por la app de Ajustes o tras cachear el dispositivo en el stack clásico/BLE.
+
+**Qué debe hacer el frontend (mitigaciones):**
+
+1. **Filtro obligatorio:** `{ namePrefix: 'NiloCardmed' }` — nunca `services` en `filters`.
+2. **No emparejar por el sistema:** el flujo es `requestDevice` → `gatt.connect()` → `startNotifications()` → `auth`. No pedir al usuario que empareje en Ajustes; si ya emparejó, que **olvide** el dispositivo en Ajustes y reconecte solo desde la app.
+3. **Orden estricto tras conectar** (en &lt; 5 s, antes de timeout):
+   - `device.gatt.connect()`
+   - `getPrimaryService(SERVICE_UUID)`
+   - `getCharacteristic(TX_UUID)` → **`startNotifications()`**
+   - listener `characteristicvaluechanged`
+   - recién entonces `auth`
+4. **Timeout primera conexión:** mínimo **20–30 s** en tablet (no 5–10 s).
+5. **Tras desconexión:** `gattserverdisconnected` → limpiar token/UI → nuevo `requestDevice` con gesto de usuario (no reutilizar bond roto).
+6. **Mensaje UX si el picker sale vacío:** «Abre Ajustes → Bluetooth un momento y vuelve» es workaround temporal; la corrección es revisar `filters` y permisos (Bluetooth + ubicación en Android antiguo).
+
+#### Android: conexión cae a los pocos segundos (timeout en app, icono Pi parpadea)
+
+**Síntoma:** empareja/conecta, icono verde en la Pi, a los ~5–30 s timeout en la app y el icono vuelve a parpadear.
+
+**Causas mixtas:**
+
+| Origen | Detalle |
+|--------|---------|
+| **Frontend** | No llamó a `startNotifications()` antes de `auth`; timeout demasiado corto. |
+| **Frontend** | Emparejamiento clásico en Ajustes + GATT Web Bluetooth → estados inconsistentes. |
+| **Backend (Pi)** | El supervisor restauraba discoverable/anuncio LE **mientras** había GATT conectado pero aún sin notify → cortaba la sesión. Corregido: no tocar discoverable con cliente activo; `has_active_client` incluye enlace GATT. |
+
+**Prueba en Pi durante un intento fallido:**
+
+```bash
+sudo ./scripts/pi-start.sh trace
+# en otra sesión, conectar desde el tablet y observar:
+# - "Cliente BLE conectado (GATT)"
+# - "suscrito a notificaciones TX"
+# - si aparece "Restaurando anuncio LE" o "bluetooth_reinicio" mientras conectado → bug backend
+```
+
 #### Requisitos de entorno a verificar
 
 - App servida por **HTTPS** (excepto `http://localhost` en desarrollo).

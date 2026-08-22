@@ -65,7 +65,8 @@ class BluetoothSupervisor:
                 continue
 
             if resilience.bluetooth_keep_discoverable_enabled:
-                self._bluetooth_service.ensure_adapter_visibility()
+                if not self._bluetooth_service.has_active_client():
+                    self._bluetooth_service.ensure_adapter_visibility()
 
             if resilience.bluetooth_supervisor_enabled:
                 if not self._bluetooth_service.is_healthy():

@@ -43,7 +43,7 @@ En cada `install.sh` / `update.sh` se ejecuta `scripts/ensure-host-always-on.sh`
 - **raspi-config** → *Display Options* → *Screen Blanking* → **No**
 - `hdmi_blanking=0` y `consoleblank=0` en firmware/kernel
 - systemd: sin suspender/hibernar por inactividad
-- lightdm / X11: DPMS desactivado (`xset s off -dpms`)
+- lightdm / X11: DPMS desactivado (`xset s off -dpms` en autostart LXDE; **no** se modifica `xserver-command` de lightdm — rompe el escritorio en Pi OS)
 
 Reinicio recomendado tras el primer despliegue.
 

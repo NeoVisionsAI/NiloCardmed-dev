@@ -86,16 +86,22 @@ console=serial0,115200 console=tty1 root=PARTUUID=xxxx rootfstype=ext4 fsck.repa
 
 Si dudas: copia `cmdline.txt` desde una SD con Pi OS limpia del mismo modelo y solo cambia el `PARTUUID` por el tuyo (`7c87d4cb-02` en fstab → usa el de tu partición root).
 
-### 2.3 Lightdm y arranque gráfico
+### 2.3 Lightdm (pantalla negra tras install)
 
-En root, renombra (no borres):
+**No** uses el dropin antiguo `nilocardmed-no-blanking.conf` con `xserver-command=X ...` — deja la pantalla negra en Raspberry Pi OS.
+
+En root, renombra si existe:
 
 ```text
 etc/lightdm/lightdm.conf.d/nilocardmed-no-blanking.conf
-→ nilocardmed-no-blanking.conf.bak
+→ nilocardmed-no-blanking.conf.disabled
 ```
 
-Comprueba el target por defecto:
+Luego (con SSH): `sudo systemctl restart lightdm`
+
+El script actualizado `ensure-host-always-on.sh` ya **no crea** ese fichero y elimina el obsoleto en cada update.
+
+### 2.4 Arranque gráfico
 
 ```text
 etc/systemd/system/default.target
@@ -104,7 +110,7 @@ etc/systemd/system/default.target
 - Si apunta a `multi-user.target` y quieres escritorio: bórralo o enlázalo otra vez a `graphical.target` (como en Pi OS stock).
 - Si `etc/systemd/system/lightdm.service` existe como enlace a `/dev/null` (masked), elimínalo para des-enmascarar lightdm.
 
-### 2.4 Comprobar el sistema de ficheros (desde el PC)
+### 2.5 Comprobar el sistema de ficheros (desde el PC)
 
 Con la partición root montada en Linux:
 
@@ -114,7 +120,7 @@ sudo fsck -n /dev/sdX2    # solo lectura; sustituye sdX2 por tu partición ext4
 
 Si reporta errores graves, `sudo fsck -y /dev/sdX2` (con la partición **desmontada**).
 
-### 2.5 Volver a arrancar
+### 2.6 Volver a arrancar
 
 1. Expulsa la SD con seguridad.
 2. Vuelve a insertarla en la Pi y enciende.

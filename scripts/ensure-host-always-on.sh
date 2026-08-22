@@ -131,19 +131,15 @@ disable_hdmi_blanking() {
   log_info "Firmware ${config_file}: hdmi_blanking=0"
 }
 
-disable_lightdm_blanking() {
+remove_lightdm_xserver_dropin() {
+  # NO usar xserver-command en lightdm: rompe X11 en Raspberry Pi OS (pantalla negra).
+  # DPMS se controla con xset en autostart (disable_x_dpms) y raspi-config.
   local dropin_dir="/etc/lightdm/lightdm.conf.d"
   local dropin_file="${dropin_dir}/nilocardmed-no-blanking.conf"
-  if ! systemctl list-unit-files lightdm.service >/dev/null 2>&1; then
-    return 0
+  if [[ -f "${dropin_file}" ]]; then
+    mv "${dropin_file}" "${dropin_file}.disabled"
+    log_info "lightdm: eliminado dropin obsoleto ${dropin_file} (evita pantalla negra)"
   fi
-  mkdir -p "${dropin_dir}"
-  cat >"${dropin_file}" <<'EOF'
-# NiloCardmed: evitar apagado DPMS del servidor X (Screen Blanking)
-[Seat:*]
-xserver-command=X -s 0 -dpms s noblank
-EOF
-  log_info "lightdm: ${dropin_file}"
 }
 
 disable_desktop_power_management() {
@@ -213,7 +209,7 @@ main() {
   disable_console_blank
   disable_hdmi_blanking
   disable_raspi_screen_blanking
-  disable_lightdm_blanking
+  remove_lightdm_xserver_dropin
   disable_x_dpms
   disable_desktop_power_management
   ensure_kernel_consoleblank

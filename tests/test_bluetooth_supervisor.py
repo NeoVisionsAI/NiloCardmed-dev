@@ -58,6 +58,7 @@ def test_supervisor_keeps_discoverable_without_gatt_restart():
 
     bluetooth_service = MagicMock()
     bluetooth_service.is_healthy.return_value = False
+    bluetooth_service.has_active_client.return_value = False
 
     shutdown = threading.Event()
 
