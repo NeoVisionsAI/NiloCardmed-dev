@@ -236,6 +236,8 @@ path, interface, ssid, channel, password, ieee11n = sys.argv[1:7]
 lines = [
     f"interface={interface}",
     "driver=nl80211",
+    "ctrl_interface=/run/nilocardmed/wifi-ap/hostapd-ctrl",
+    "ctrl_interface_group=0",
     f"ssid={ssid}",
     "hw_mode=g",
     f"channel={channel}",
@@ -447,6 +449,134 @@ start_dnsmasq() {
   return 1
 }
 
+stop_udhcpd() {
+  if [[ -f "${RUN_DIR}/udhcpd.pid" ]]; then
+    kill "$(cat "${RUN_DIR}/udhcpd.pid")" 2>/dev/null || true
+    rm -f "${RUN_DIR}/udhcpd.pid"
+  fi
+  pkill -f "${CONFIG_DIR}/udhcpd.conf" 2>/dev/null || true
+}
+
+udhcpd_is_running() {
+  [[ -f "${RUN_DIR}/udhcpd.pid" ]] && kill -0 "$(cat "${RUN_DIR}/udhcpd.pid")" 2>/dev/null
+}
+
+start_udhcpd() {
+  local conf="${CONFIG_DIR}/udhcpd.conf"
+
+  stop_udhcpd
+  if ! command -v udhcpd >/dev/null 2>&1; then
+    log_warn "udhcpd no instalado — sudo apt install udhcpd"
+    return 1
+  fi
+
+  mkdir -p "${LOG_DIR}" "${RUN_DIR}" "${CONFIG_DIR}"
+  cat >"${conf}" <<EOF
+start 192.168.4.10
+end 192.168.4.50
+interface ${AP_INTERFACE}
+max_leases 50
+remaining yes
+opt dns ${AP_IP}
+opt subnet 255.255.255.0
+opt router ${AP_IP}
+opt lease 432000
+EOF
+
+  free_dhcp_port
+  systemctl stop udhcpd.service 2>/dev/null || true
+  log_dnsmasq "arrancando udhcpd en ${AP_INTERFACE}"
+  if ! udhcpd -S "${conf}" >>"${LOG_DIR}/udhcpd.log" 2>&1; then
+    log_warn "udhcpd exit code $?"
+    return 1
+  fi
+  sleep 2
+
+  local pid=""
+  pid="$(pgrep -xo udhcpd 2>/dev/null || true)"
+  if [[ -n "${pid}" ]]; then
+    echo "${pid}" >"${RUN_DIR}/udhcpd.pid"
+  fi
+
+  if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null && dnsmasq_dhcp_listening; then
+    log "udhcpd activo — DHCP en ${AP_IP}:67"
+    return 0
+  fi
+  log_warn "udhcpd falló: $(tail -5 "${LOG_DIR}/udhcpd.log" 2>/dev/null | tr '\n' ' ')"
+  stop_udhcpd
+  return 1
+}
+
+start_dhcp_server() {
+  assign_ap_ip
+  ensure_ap_firewall
+  stop_udhcpd
+
+  if start_dnsmasq; then
+    return 0
+  fi
+
+  log_warn "dnsmasq falló — probando udhcpd (alternativa DHCP en Pi)..."
+  stop_dnsmasq
+  if start_udhcpd; then
+    return 0
+  fi
+
+  log_error "Ningún servidor DHCP arrancó (dnsmasq ni udhcpd)"
+  return 1
+}
+
+stop_dhcp_server() {
+  stop_dnsmasq
+  stop_udhcpd
+}
+
+dhcp_server_running() {
+  dnsmasq_is_running || udhcpd_is_running
+}
+
+start_hostapd_cli_monitor() {
+  local action_script="${INSTALL_DIR}/scripts/wifi-ap-hostapd-action.sh"
+
+  if ! command -v hostapd_cli >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ ! -f "${action_script}" ]]; then
+    log_warn "No encontrado: ${action_script}"
+    return 0
+  fi
+
+  mkdir -p "${RUN_DIR}/hostapd-ctrl"
+  chmod +x "${action_script}"
+  pkill -f "hostapd_cli -i ${AP_INTERFACE} -a" 2>/dev/null || true
+  hostapd_cli -i "${AP_INTERFACE}" -a "${action_script}" >>"${LOG_DIR}/hostapd-cli.log" 2>&1 &
+  echo $! >"${RUN_DIR}/hostapd-cli.pid"
+  log "hostapd_cli monitor activo (DHCP al conectar cliente)"
+}
+
+stop_hostapd_cli_monitor() {
+  if [[ -f "${RUN_DIR}/hostapd-cli.pid" ]]; then
+    kill "$(cat "${RUN_DIR}/hostapd-cli.pid")" 2>/dev/null || true
+    rm -f "${RUN_DIR}/hostapd-cli.pid"
+  fi
+  pkill -f "hostapd_cli -i ${AP_INTERFACE} -a" 2>/dev/null || true
+}
+
+on_sta_connected() {
+  local mac="${1:-}"
+  load_deploy_env
+  mkdir -p "${LOG_DIR}"
+  log "Cliente asociado${mac:+ ${mac}} — uap0 puede pasar a LOWER_UP; arrancando DHCP..."
+  sleep 2
+  if start_dhcp_server; then
+    log "DHCP activo tras conexión de cliente"
+    ip -br link show "${AP_INTERFACE}" 2>/dev/null || true
+    return 0
+  fi
+  log_error "DHCP falló tras conexión de cliente — revisa ${LOG_DIR}/dnsmasq-start.log y udhcpd.log"
+  return 1
+}
+
 repair_dhcp() {
   load_deploy_env
   mkdir -p "${LOG_DIR}" "${RUN_DIR}" "${CONFIG_DIR}"
@@ -457,8 +587,7 @@ repair_dhcp() {
   fi
   assign_ap_ip
   ensure_ap_firewall
-  write_dnsmasq_conf bind-interfaces
-  if start_dnsmasq; then
+  if start_dhcp_server; then
     log "DHCP reparado. Conecta la tablet y mira: sudo tail -f ${LOG_DIR}/dnsmasq-start.log"
     return 0
   fi
@@ -540,10 +669,11 @@ prepare_ap_core() {
 
 start_ap_services() {
   start_hostapd_with_fallback "${AP_SSID}" "${AP_CHANNEL}" "${AP_PASSWORD}" || return 1
-  start_dnsmasq || {
-    stop_hostapd
-    return 1
-  }
+  mkdir -p "${RUN_DIR}/hostapd-ctrl"
+  start_hostapd_cli_monitor
+  if ! start_dhcp_server; then
+    log_warn "DHCP no arrancó al inicio — se reintentará cuando un cliente se conecte (hostapd_cli)"
+  fi
   return 0
 }
 
@@ -556,16 +686,17 @@ prepare_ap() {
 
 monitor_hostapd_foreground() {
   local hp_pid="$1"
-  trap 'stop_dnsmasq; stop_hostapd; exit 143' TERM INT
+  trap 'stop_dhcp_server; stop_hostapd_cli_monitor; stop_hostapd; exit 143' TERM INT
   while kill -0 "${hp_pid}" 2>/dev/null; do
-    if ! dnsmasq_is_running || ! dnsmasq_dhcp_listening; then
-      log_warn "dnsmasq caído — reiniciando DHCP..."
-      start_dnsmasq || log_error "No se pudo reiniciar dnsmasq"
+    if ! dhcp_server_running || ! dnsmasq_dhcp_listening; then
+      log_warn "DHCP caído — reintentando..."
+      start_dhcp_server || log_error "No se pudo reiniciar DHCP"
     fi
     sleep 5
   done
   log_error "hostapd (pid ${hp_pid}) terminó — revisa ${LOG_DIR}/hostapd.log"
-  stop_dnsmasq
+  stop_dhcp_server
+  stop_hostapd_cli_monitor
   return 1
 }
 
@@ -582,15 +713,17 @@ run_ap_foreground() {
 }
 
 start_ap() {
+  stop_hostapd_cli_monitor
   stop_hostapd
-  stop_dnsmasq
+  stop_dhcp_server
   prepare_ap || exit 1
   log "AP activo (background)"
 }
 
 stop_ap() {
   load_deploy_env
-  stop_dnsmasq
+  stop_dhcp_server
+  stop_hostapd_cli_monitor
   stop_hostapd
 
   if ip link show "${AP_INTERFACE}" >/dev/null 2>&1; then
@@ -604,6 +737,11 @@ status_ap() {
   load_deploy_env
   ip -br link show "${AP_INTERFACE}" 2>/dev/null || echo "${AP_INTERFACE}: no existe"
   ip -br addr show "${AP_INTERFACE}" 2>/dev/null || true
+  if ip link show "${AP_INTERFACE}" 2>/dev/null | grep -q "LOWER_UP"; then
+    echo "uap0: LOWER_UP (cliente asociado o AP activo)"
+  else
+    echo "uap0: NO-CARRIER (normal sin clientes; tras conectar debe aparecer LOWER_UP)"
+  fi
   iw dev "${AP_INTERFACE}" info 2>/dev/null || echo "iw: sin info AP (hostapd probablemente caído)"
   if hostapd_is_running; then
     echo "hostapd: activo pid $(cat "${RUN_DIR}/hostapd.pid")"
@@ -611,17 +749,23 @@ status_ap() {
     echo "hostapd: NO ACTIVO"
   fi
   if dnsmasq_is_running; then
-    echo "dnsmasq: activo pid $(cat "${RUN_DIR}/dnsmasq.pid")"
-    if dnsmasq_dhcp_listening; then
-      echo "dhcp: escuchando en UDP 67"
-    else
-      echo "dhcp: NO escucha en UDP 67 — reinicia: sudo systemctl restart nilocardmed-wifi-ap"
-    fi
+    echo "dhcp: dnsmasq pid $(cat "${RUN_DIR}/dnsmasq.pid")"
+  elif udhcpd_is_running; then
+    echo "dhcp: udhcpd pid $(cat "${RUN_DIR}/udhcpd.pid")"
   else
-    echo "dnsmasq: NO ACTIVO (sin DHCP la tablet se queda en 'estableciendo dirección')"
+    echo "dhcp: NO ACTIVO (tablet se queda en 'obteniendo IP')"
   fi
-  [[ -f "${LOG_DIR}/dnsmasq-start.log" ]] && echo "--- dnsmasq-start.log (últimas líneas) ---" \
+  if dnsmasq_dhcp_listening; then
+    echo "dhcp: escuchando UDP 67"
+  else
+    echo "dhcp: NO escucha UDP 67"
+  fi
+  [[ -f "${LOG_DIR}/dnsmasq-start.log" ]] && echo "--- dnsmasq-start.log ---" \
     && tail -5 "${LOG_DIR}/dnsmasq-start.log" || true
+  [[ -f "${LOG_DIR}/udhcpd.log" ]] && echo "--- udhcpd.log ---" \
+    && tail -5 "${LOG_DIR}/udhcpd.log" || true
+  [[ -f "${LOG_DIR}/sta-connected.log" ]] && echo "--- sta-connected.log ---" \
+    && tail -5 "${LOG_DIR}/sta-connected.log" || true
 }
 
 diagnose_ap() {
@@ -656,6 +800,7 @@ case "${cmd}" in
   stop) stop_ap ;;
   restart) stop_ap; start_ap ;;
   repair-dhcp) repair_dhcp ;;
+  on-sta-connected) on_sta_connected "${2:-}" ;;
   status) status_ap ;;
   diagnose) diagnose_ap ;;
   *)

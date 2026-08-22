@@ -62,7 +62,7 @@ ensure_wifi_ap_packages() {
   fi
 
   local need_install=false
-  for cmd_pkg in "hostapd:hostapd" "dnsmasq:dnsmasq" "iw:iw"; do
+  for cmd_pkg in "hostapd:hostapd" "dnsmasq:dnsmasq" "udhcpd:udhcpd" "iw:iw"; do
     local cmd="${cmd_pkg%%:*}"
     local pkg="${cmd_pkg#*:}"
     if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -77,7 +77,7 @@ ensure_wifi_ap_packages() {
 
   log_info "=== Paquetes WiFi AP (hostapd, dnsmasq, iw) ==="
   apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq hostapd dnsmasq iw
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq hostapd dnsmasq udhcpd iw
 }
 
 require_command() {

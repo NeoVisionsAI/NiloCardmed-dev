@@ -94,6 +94,7 @@ WantedBy=multi-user.target
 EOF
 
 chmod +x "${INSTALL_DIR}/scripts/wifi-ap-run.sh"
+chmod +x "${INSTALL_DIR}/scripts/wifi-ap-hostapd-action.sh"
 systemctl daemon-reload
 systemctl enable nilocardmed-wifi-ap.service
 
