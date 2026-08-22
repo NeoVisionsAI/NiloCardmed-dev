@@ -686,11 +686,15 @@ prepare_ap() {
 
 monitor_hostapd_foreground() {
   local hp_pid="$1"
+  local dhcp_tick=0
   trap 'stop_dhcp_server; stop_hostapd_cli_monitor; stop_hostapd; exit 143' TERM INT
   while kill -0 "${hp_pid}" 2>/dev/null; do
     if ! dhcp_server_running || ! dnsmasq_dhcp_listening; then
-      log_warn "DHCP caído — reintentando..."
-      start_dhcp_server || log_error "No se pudo reiniciar DHCP"
+      if [[ $((dhcp_tick % 6)) -eq 0 ]]; then
+        log_warn "DHCP caído — reintentando..."
+        start_dhcp_server || log_error "No se pudo reiniciar DHCP"
+      fi
+      dhcp_tick=$((dhcp_tick + 1))
     fi
     sleep 5
   done
@@ -768,6 +772,24 @@ status_ap() {
     && tail -5 "${LOG_DIR}/sta-connected.log" || true
 }
 
+wait_for_ap_ready() {
+  local attempt ssid=""
+  load_deploy_env
+  log "Esperando AP (${AP_INTERFACE} + hostapd)..."
+  for attempt in $(seq 1 45); do
+    if hostapd_is_running && ip link show "${AP_INTERFACE}" >/dev/null 2>&1; then
+      ssid="$(iw dev "${AP_INTERFACE}" info 2>/dev/null | awk -F: '/ssid/ {print $2; exit}' | sed 's/^[[:space:]]*//')"
+      if [[ -n "${ssid}" ]]; then
+        log "AP listo: SSID=${ssid} (intento ${attempt})"
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+  log_error "AP no listo tras 90 s — hostapd=$(hostapd_is_running && echo OK || echo NO) uap0=$(ip link show "${AP_INTERFACE}" >/dev/null 2>&1 && echo OK || echo NO)"
+  return 1
+}
+
 diagnose_ap() {
   load_deploy_env
   log "=== Diagnóstico WiFi AP ==="
@@ -801,10 +823,11 @@ case "${cmd}" in
   restart) stop_ap; start_ap ;;
   repair-dhcp) repair_dhcp ;;
   on-sta-connected) on_sta_connected "${2:-}" ;;
+  wait-ready) wait_for_ap_ready ;;
   status) status_ap ;;
   diagnose) diagnose_ap ;;
   *)
-    echo "Uso: $0 {start|run|prepare|stop|restart|repair-dhcp|status|diagnose}" >&2
+    echo "Uso: $0 {start|run|prepare|stop|restart|repair-dhcp|wait-ready|status|diagnose}" >&2
     exit 1
     ;;
 esac

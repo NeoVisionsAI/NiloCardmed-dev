@@ -26,9 +26,9 @@ run_with_timeout() {
   local seconds="$1"
   shift
   if command -v timeout >/dev/null 2>&1; then
-    timeout "${seconds}" "$@" || true
+    timeout "${seconds}" "$@"
   else
-    "$@" || true
+    "$@"
   fi
 }
 
