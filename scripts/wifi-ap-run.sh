@@ -235,21 +235,50 @@ PY
 }
 
 write_dnsmasq_conf() {
+  local mode="${1:-bind-interfaces}"
   local conf="${CONFIG_DIR}/dnsmasq.conf"
-  cat >"${conf}" <<EOF
+
+  if [[ "${mode}" == "bind-dynamic" ]]; then
+    cat >"${conf}" <<EOF
 interface=${AP_INTERFACE}
 bind-dynamic
 listen-address=${AP_IP}
 port=0
 dhcp-authoritative
-log-dhcp
 dhcp-range=192.168.4.10,192.168.4.50,255.255.255.0,12h
-dhcp-option=option:router,${AP_IP}
-dhcp-option=option:dns-server,${AP_IP}
+dhcp-option=3,${AP_IP}
+dhcp-option=6,${AP_IP}
 no-hosts
 no-resolv
-log-facility=${LOG_DIR}/dnsmasq.log
 EOF
+  else
+    cat >"${conf}" <<EOF
+interface=${AP_INTERFACE}
+bind-interfaces
+except-interface=lo
+listen-address=${AP_IP}
+port=0
+dhcp-authoritative
+dhcp-range=192.168.4.10,192.168.4.50,255.255.255.0,12h
+dhcp-option=3,${AP_IP}
+dhcp-option=6,${AP_IP}
+no-hosts
+no-resolv
+EOF
+  fi
+}
+
+dnsmasq_is_running() {
+  [[ -f "${RUN_DIR}/dnsmasq.pid" ]] && kill -0 "$(cat "${RUN_DIR}/dnsmasq.pid")" 2>/dev/null
+}
+
+dnsmasq_dhcp_listening() {
+  ss -ulnp 2>/dev/null | grep -qE ':67[^0-9].*dnsmasq|:67 .*dnsmasq'
+}
+
+test_dnsmasq_conf() {
+  local conf="${CONFIG_DIR}/dnsmasq.conf"
+  dnsmasq --test -C "${conf}" >>"${LOG_DIR}/dnsmasq-start.log" 2>&1
 }
 
 verify_ap_active() {
@@ -288,19 +317,48 @@ stop_hostapd() {
   pkill -f "${CONFIG_DIR}/hostapd.conf" 2>/dev/null || true
 }
 
-start_dnsmasq() {
-  stop_dnsmasq
-  assign_ap_ip
-  dnsmasq -C "${CONFIG_DIR}/dnsmasq.conf" -x "${RUN_DIR}/dnsmasq.pid" \
-    >>"${LOG_DIR}/dnsmasq-start.log" 2>&1 || {
-    log_error "dnsmasq falló: $(tail -5 "${LOG_DIR}/dnsmasq-start.log" | tr '\n' ' ')"
+start_dnsmasq_once() {
+  local conf="${CONFIG_DIR}/dnsmasq.conf"
+  mkdir -p "${LOG_DIR}" "${RUN_DIR}"
+  : >>"${LOG_DIR}/dnsmasq-start.log"
+
+  if ! test_dnsmasq_conf; then
+    log_warn "dnsmasq --test falló: $(tail -3 "${LOG_DIR}/dnsmasq-start.log" | tr '\n' ' ')"
     return 1
-  }
-  if ss -ulnp 2>/dev/null | grep -q ":67.*dnsmasq"; then
-    log "dnsmasq escuchando DHCP en ${AP_IP}:67"
-  else
-    log_warn "dnsmasq arrancó pero no se ve puerto 67 UDP — revisa ${LOG_DIR}/dnsmasq-start.log"
   fi
+
+  dnsmasq -C "${conf}" -x "${RUN_DIR}/dnsmasq.pid" --log-dhcp \
+    >>"${LOG_DIR}/dnsmasq-start.log" 2>&1 || return 1
+
+  sleep 1
+  dnsmasq_is_running && dnsmasq_dhcp_listening
+}
+
+start_dnsmasq() {
+  local mode
+
+  stop_dnsmasq
+  systemctl stop dnsmasq.service 2>/dev/null || true
+  assign_ap_ip
+
+  if ! ip link show "${AP_INTERFACE}" 2>/dev/null | grep -q "UP"; then
+    log_error "${AP_INTERFACE} no está UP — no se puede arrancar dnsmasq"
+    return 1
+  fi
+
+  for mode in bind-interfaces bind-dynamic; do
+    log "Arrancando dnsmasq (${mode}) en ${AP_IP}..."
+    write_dnsmasq_conf "${mode}"
+    if start_dnsmasq_once; then
+      log "dnsmasq activo — DHCP en ${AP_IP}:67"
+      return 0
+    fi
+    stop_dnsmasq
+  done
+
+  log_error "dnsmasq no arrancó — log: ${LOG_DIR}/dnsmasq-start.log"
+  tail -8 "${LOG_DIR}/dnsmasq-start.log" >&2 2>/dev/null || true
+  return 1
 }
 
 # hostapd -t falla en brcmfmac con uap0; probamos arranque real con reintentos.
@@ -387,6 +445,10 @@ monitor_hostapd_foreground() {
   local hp_pid="$1"
   trap 'stop_dnsmasq; stop_hostapd; exit 143' TERM INT
   while kill -0 "${hp_pid}" 2>/dev/null; do
+    if ! dnsmasq_is_running || ! dnsmasq_dhcp_listening; then
+      log_warn "dnsmasq caído — reiniciando DHCP..."
+      start_dnsmasq || log_error "No se pudo reiniciar dnsmasq"
+    fi
     sleep 5
   done
   log_error "hostapd (pid ${hp_pid}) terminó — revisa ${LOG_DIR}/hostapd.log"
@@ -435,11 +497,18 @@ status_ap() {
   else
     echo "hostapd: NO ACTIVO"
   fi
-  if [[ -f "${RUN_DIR}/dnsmasq.pid" ]] && kill -0 "$(cat "${RUN_DIR}/dnsmasq.pid")" 2>/dev/null; then
+  if dnsmasq_is_running; then
     echo "dnsmasq: activo pid $(cat "${RUN_DIR}/dnsmasq.pid")"
+    if dnsmasq_dhcp_listening; then
+      echo "dhcp: escuchando en UDP 67"
+    else
+      echo "dhcp: NO escucha en UDP 67 — reinicia: sudo systemctl restart nilocardmed-wifi-ap"
+    fi
   else
-    echo "dnsmasq: no activo"
+    echo "dnsmasq: NO ACTIVO (sin DHCP la tablet se queda en 'estableciendo dirección')"
   fi
+  [[ -f "${LOG_DIR}/dnsmasq-start.log" ]] && echo "--- dnsmasq-start.log (últimas líneas) ---" \
+    && tail -5 "${LOG_DIR}/dnsmasq-start.log" || true
 }
 
 diagnose_ap() {
@@ -457,7 +526,7 @@ diagnose_ap() {
   systemctl status nilocardmed-wifi-ap --no-pager 2>/dev/null || true
   status_ap
   [[ -f "${LOG_DIR}/hostapd.log" ]] && tail -20 "${LOG_DIR}/hostapd.log" || log_warn "Sin ${LOG_DIR}/hostapd.log"
-  [[ -f "${LOG_DIR}/dnsmasq.log" ]] && tail -10 "${LOG_DIR}/dnsmasq.log" || true
+  [[ -f "${LOG_DIR}/dnsmasq-start.log" ]] && tail -15 "${LOG_DIR}/dnsmasq-start.log" || log_warn "Sin ${LOG_DIR}/dnsmasq-start.log"
   ss -ulnp 2>/dev/null | grep -E ':67|:53' || log_warn "Sin dnsmasq en UDP 67 (DHCP)"
   [[ -f "${LOG_DIR}/iw-add.err" ]] && cat "${LOG_DIR}/iw-add.err" || true
 }
