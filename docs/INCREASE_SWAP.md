@@ -28,7 +28,13 @@ Variables opcionales:
 | `NILOCARDMED_SWAP_SIZE_MB` | `1024` | Tamaño objetivo |
 | `NILOCARDMED_SWAP_FILE` | `/var/swap` | Ruta del archivo swap |
 | `DISABLE_GUI` | `false` | Sin escritorio; arranque consola (`deploy.env`) |
-| `OPTIMIZE_GPU_MEM` | `true` | `gpu_mem=16` en `config.txt` (`deploy.env`) |
+| `OPTIMIZE_GPU_MEM` | `true` | `gpu_mem=16` **solo si** `DISABLE_GUI=true` (con escritorio no se aplica) |
+
+> **Ratón lento / escritorio pesado:** si `gpu_mem=16` quedó aplicado con escritorio activo, sube la RAM de GPU y reinicia:
+> ```bash
+> sudo sed -i 's/^gpu_mem=.*/gpu_mem=128/' /boot/firmware/config.txt
+> sudo reboot
+> ```
 
 ### Pantalla siempre encendida (automático)
 

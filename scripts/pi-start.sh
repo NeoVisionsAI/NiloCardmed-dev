@@ -39,6 +39,7 @@ Comandos:
   logs      docker compose logs -f --tail=100
   trace     Traza operativa BLE/WiFi (filtrada). Ver también: trace-full
   trace-full  Todos los logs del contenedor (sin filtro grep)
+  ble-recover  Recupera BLE tras emparejamiento huérfano / sin anuncio (requiere sudo)
   deploy    Alias de update.sh: código + Bluetooth host + rebuild opcional + restart
 
 Opciones (start / install / deploy):
@@ -86,6 +87,10 @@ parse_args() {
       ;;
     trace-full | tracefull)
       cmd_trace_full
+      exit 0
+      ;;
+    ble-recover | bluetooth-recover)
+      cmd_ble_recover "$@"
       exit 0
       ;;
     deploy | update)
@@ -392,6 +397,22 @@ cmd_deploy() {
   log_info "Despliegue: ${update_script} $*"
   log_info "(incluye ensure-bluetooth-powered + systemctl restart nilocardmed)"
   exec bash "${update_script}" "$@"
+}
+
+cmd_ble_recover() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    log_error "ble-recover requiere root: sudo ./scripts/pi-start.sh ble-recover [--purge-bonds]"
+    exit 1
+  fi
+  local script="${REPO_ROOT}/scripts/bluetooth-recover.sh"
+  if [[ ! -f "${script}" ]]; then
+    script="${INSTALL_DIR}/scripts/bluetooth-recover.sh"
+  fi
+  if [[ ! -f "${script}" ]]; then
+    log_error "No se encontró scripts/bluetooth-recover.sh"
+    exit 1
+  fi
+  exec bash "${script}" "$@"
 }
 
 main() {

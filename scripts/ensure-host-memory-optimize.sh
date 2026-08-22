@@ -92,16 +92,19 @@ main() {
 
   log_info "=== Optimización memoria host (DISABLE_GUI=${DISABLE_GUI}, OPTIMIZE_GPU_MEM=${OPTIMIZE_GPU_MEM}) ==="
 
-  if is_true "${OPTIMIZE_GPU_MEM}"; then
-    optimize_gpu_mem
-  else
-    log_info "OPTIMIZE_GPU_MEM=false — omitiendo gpu_mem"
-  fi
-
   if is_true "${DISABLE_GUI}"; then
     disable_graphical_target
+    if is_true "${OPTIMIZE_GPU_MEM}"; then
+      optimize_gpu_mem
+    else
+      log_info "OPTIMIZE_GPU_MEM=false — omitiendo gpu_mem"
+    fi
   else
     log_info "DISABLE_GUI=false — se mantiene el entorno gráfico"
+    if is_true "${OPTIMIZE_GPU_MEM}"; then
+      log_warn "OPTIMIZE_GPU_MEM=true ignorado con escritorio activo (gpu_mem=16 ralentiza el ratón/X11)"
+      log_warn "Para liberar RAM sin GUI: DISABLE_GUI=true en deploy.env y reiniciar"
+    fi
   fi
 }
 
