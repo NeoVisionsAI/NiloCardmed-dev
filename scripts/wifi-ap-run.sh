@@ -281,10 +281,9 @@ EOF
 interface=${AP_INTERFACE}
 bind-interfaces
 except-interface=lo
+listen-address=${AP_IP}
 port=0
 dhcp-authoritative
-dhcp-broadcast
-log-dhcp
 dhcp-range=192.168.4.10,192.168.4.50,255.255.255.0,12h
 dhcp-option=3,${AP_IP}
 dhcp-option=6,${AP_IP}
@@ -292,6 +291,19 @@ no-hosts
 no-resolv
 EOF
   fi
+}
+
+write_dnsmasq_conf_minimal() {
+  local conf="${CONFIG_DIR}/dnsmasq.conf"
+  cat >"${conf}" <<EOF
+interface=${AP_INTERFACE}
+port=0
+dhcp-range=192.168.4.10,192.168.4.50,255.255.255.0,12h
+dhcp-option=3,${AP_IP}
+dhcp-option=6,${AP_IP}
+no-hosts
+no-resolv
+EOF
 }
 
 dnsmasq_is_running() {
@@ -323,18 +335,30 @@ test_dnsmasq_conf() {
 
 verify_ap_active() {
   local attempt ssid=""
-  for attempt in $(seq 1 15); do
-    if hostapd_is_running; then
-      ssid="$(iw dev "${AP_INTERFACE}" info 2>/dev/null | awk -F: '/ssid/ {print $2; exit}' | sed 's/^[[:space:]]*//')"
-      if [[ -n "${ssid}" ]]; then
-        log "AP activo: SSID=${ssid}"
-        return 0
-      fi
+
+  for attempt in $(seq 1 30); do
+    if ! hostapd_is_running; then
+      sleep 1
+      continue
+    fi
+    ssid="$(iw dev "${AP_INTERFACE}" info 2>/dev/null | awk -F: '/ssid/ {print $2; exit}' | sed 's/^[[:space:]]*//')"
+    if [[ -n "${ssid}" ]]; then
+      log "AP activo: SSID=${ssid}"
+      return 0
+    fi
+    if iw dev "${AP_INTERFACE}" info 2>/dev/null | grep -q "type AP"; then
+      log "AP activo (type AP en ${AP_INTERFACE})"
+      return 0
+    fi
+    if [[ -f "${LOG_DIR}/hostapd.log" ]] && tail -8 "${LOG_DIR}/hostapd.log" | grep -q "AP-ENABLED"; then
+      log "AP activo (hostapd AP-ENABLED)"
+      return 0
     fi
     sleep 1
   done
+
   if hostapd_is_running; then
-    log_warn "hostapd corre pero uap0 no emite SSID"
+    log_warn "hostapd corre pero verify_ap_active agotó timeout (30 s)"
   else
     log_warn "hostapd terminó: $(tail -8 "${LOG_DIR}/hostapd.log" 2>/dev/null | tr '\n' ' ')"
   fi
@@ -389,10 +413,14 @@ start_dnsmasq_once() {
   if ! dnsmasq -C "${conf}" -x "${RUN_DIR}/dnsmasq.pid" --log-dhcp \
     >>"${LOG_DIR}/dnsmasq-start.log" 2>&1; then
     log_dnsmasq "dnsmasq exit code $?"
+    timeout 3 dnsmasq -d -C "${conf}" --log-dhcp >>"${LOG_DIR}/dnsmasq-start.log" 2>&1 || true
     return 1
   fi
 
   sleep 2
+  if dnsmasq_is_running; then
+    log_dnsmasq "dnsmasq pid $(cat "${RUN_DIR}/dnsmasq.pid" 2>/dev/null || echo '?')"
+  fi
   if dnsmasq_is_running && dnsmasq_dhcp_listening; then
     return 0
   fi
@@ -401,7 +429,7 @@ start_dnsmasq_once() {
     ss -ulnp >>"${LOG_DIR}/dnsmasq-start.log" 2>&1 || true
     dnsmasq_dhcp_listening && return 0
   fi
-  log_dnsmasq "falló tras arrancar"
+  log_dnsmasq "falló tras arrancar: $(pgrep -a dnsmasq 2>/dev/null | tr '\n' ' ')"
   return 1
 }
 
@@ -424,9 +452,12 @@ start_dnsmasq() {
     return 1
   fi
 
-  for mode in bind-interfaces bind-dynamic; do
+  for mode in minimal bind-interfaces bind-dynamic; do
     log "Arrancando dnsmasq (${mode}) en ${AP_IP}..."
-    write_dnsmasq_conf "${mode}"
+    case "${mode}" in
+      minimal) write_dnsmasq_conf_minimal ;;
+      *) write_dnsmasq_conf "${mode}" ;;
+    esac
     if start_dnsmasq_once; then
       log "dnsmasq activo — DHCP en ${AP_IP}:67"
       return 0
@@ -485,19 +516,13 @@ EOF
 
   free_dhcp_port
   systemctl stop udhcpd.service 2>/dev/null || true
-  log_dnsmasq "arrancando udhcpd en ${AP_INTERFACE}"
-  if ! udhcpd -S "${conf}" >>"${LOG_DIR}/udhcpd.log" 2>&1; then
-    log_warn "udhcpd exit code $?"
-    return 1
-  fi
+  log_dnsmasq "arrancando udhcpd -f en ${AP_INTERFACE}"
+  udhcpd -f "${conf}" >>"${LOG_DIR}/udhcpd.log" 2>&1 &
+  echo $! >"${RUN_DIR}/udhcpd.pid"
   sleep 2
 
   local pid=""
-  pid="$(pgrep -xo udhcpd 2>/dev/null || true)"
-  if [[ -n "${pid}" ]]; then
-    echo "${pid}" >"${RUN_DIR}/udhcpd.pid"
-  fi
-
+  pid="$(cat "${RUN_DIR}/udhcpd.pid" 2>/dev/null || true)"
   if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null && dnsmasq_dhcp_listening; then
     log "udhcpd activo — DHCP en ${AP_IP}:67"
     return 0
@@ -511,18 +536,20 @@ start_dhcp_server() {
   assign_ap_ip
   ensure_ap_firewall
   stop_udhcpd
-
-  if start_dnsmasq; then
-    return 0
-  fi
-
-  log_warn "dnsmasq falló — probando udhcpd (alternativa DHCP en Pi)..."
   stop_dnsmasq
+
+  log "Iniciando DHCP en ${AP_INTERFACE} (${AP_IP})..."
+
   if start_udhcpd; then
     return 0
   fi
 
-  log_error "Ningún servidor DHCP arrancó (dnsmasq ni udhcpd)"
+  log_warn "udhcpd falló — probando dnsmasq..."
+  if start_dnsmasq; then
+    return 0
+  fi
+
+  log_error "Ningún servidor DHCP arrancó (udhcpd ni dnsmasq)"
   return 1
 }
 
