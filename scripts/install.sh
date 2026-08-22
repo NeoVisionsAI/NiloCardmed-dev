@@ -105,6 +105,7 @@ ensure_host_directories
 
 ensure_host_always_on "${INSTALL_DIR}"
 ensure_host_swap "${INSTALL_DIR}"
+ensure_host_memory_optimize "${INSTALL_DIR}"
 
 # --- 6. Compose override (hot-plug cámara, BLE, WiFi) ---
 INSTALL_DIR="${INSTALL_DIR}" DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE}" \

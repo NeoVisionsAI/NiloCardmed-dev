@@ -366,3 +366,36 @@ ensure_host_swap() {
 
   bash "${script}" || log_warn "ensure-host-swap falló — revisa espacio en /var"
 }
+
+# DISABLE_GUI / OPTIMIZE_GPU_MEM en deploy.env (Pi Zero 2 W). Ver deploy.env.example
+ensure_host_memory_optimize() {
+  local install_dir="${1:-${INSTALL_DIR:-}}"
+
+  if [[ "${EUID}" -ne 0 ]]; then
+    log_debug "ensure_host_memory_optimize: omitido (sin root)"
+    return 0
+  fi
+
+  if [[ -f "${install_dir}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${install_dir}/deploy.env" && set +a
+  fi
+
+  local script=""
+  for candidate in \
+    "${install_dir}/scripts/ensure-host-memory-optimize.sh" \
+    "${REPO_ROOT:-}/scripts/ensure-host-memory-optimize.sh" \
+    "${SCRIPT_DIR:-}/ensure-host-memory-optimize.sh"; do
+    if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+      script="${candidate}"
+      break
+    fi
+  done
+
+  if [[ -z "${script}" ]]; then
+    log_warn "ensure-host-memory-optimize.sh no encontrado"
+    return 0
+  fi
+
+  bash "${script}" || log_warn "ensure-host-memory-optimize falló"
+}

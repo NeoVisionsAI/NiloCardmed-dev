@@ -27,6 +27,19 @@ Variables opcionales:
 |----------|---------|-------------|
 | `NILOCARDMED_SWAP_SIZE_MB` | `1024` | Tamaño objetivo |
 | `NILOCARDMED_SWAP_FILE` | `/var/swap` | Ruta del archivo swap |
+| `DISABLE_GUI` | `false` | Sin escritorio; arranque consola (`deploy.env`) |
+| `OPTIMIZE_GPU_MEM` | `true` | `gpu_mem=16` en `config.txt` (`deploy.env`) |
+
+### Pantalla siempre encendida (automático)
+
+En cada `install.sh` / `update.sh` se ejecuta `scripts/ensure-host-always-on.sh`, equivalente a:
+
+- **raspi-config** → *Display Options* → *Screen Blanking* → **No**
+- `hdmi_blanking=0` y `consoleblank=0` en firmware/kernel
+- systemd: sin suspender/hibernar por inactividad
+- lightdm / X11: DPMS desactivado (`xset s off -dpms`)
+
+Reinicio recomendado tras el primer despliegue.
 
 ---
 

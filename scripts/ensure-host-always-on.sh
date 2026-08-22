@@ -87,11 +87,96 @@ EOF
   fi
 }
 
-disable_raspi_blanking() {
+disable_raspi_screen_blanking() {
+  # Equivalente a: raspi-config → Display Options → Screen Blanking → No
   if command -v raspi-config >/dev/null 2>&1; then
-    if raspi-config nonint do_blanking 1 2>/dev/null; then
-      log_info "raspi-config: blanking de pantalla desactivado"
+    log_info "raspi-config: Display Options > Screen Blanking > No (do_blanking 1)"
+    if raspi-config nonint do_blanking 1; then
+      log_info "raspi-config: Screen Blanking desactivado"
+    else
+      log_warn "raspi-config do_blanking no aplicó cambios (continuando con alternativas)"
     fi
+  else
+    log_warn "raspi-config no instalado — omitiendo do_blanking"
+  fi
+}
+
+set_boot_config_kv() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+
+  if grep -qE "^[[:space:]]*${key}=" "${file}"; then
+    sed -i "s/^[[:space:]]*${key}=.*/${key}=${value}/" "${file}"
+  elif grep -qE "^[[:space:]]*#${key}=" "${file}"; then
+    sed -i "s/^[[:space:]]*#${key}=.*/${key}=${value}/" "${file}"
+  else
+    printf '\n# NiloCardmed: pantalla siempre encendida\n%s=%s\n' "${key}" "${value}" >>"${file}"
+  fi
+}
+
+disable_hdmi_blanking() {
+  local config_file=""
+  for candidate in /boot/firmware/config.txt /boot/config.txt; do
+    if [[ -f "${candidate}" ]]; then
+      config_file="${candidate}"
+      break
+    fi
+  done
+  if [[ -z "${config_file}" ]]; then
+    return 0
+  fi
+  # hdmi_blanking=0 → no apagar señal HDMI por inactividad
+  set_boot_config_kv "${config_file}" "hdmi_blanking" "0"
+  log_info "Firmware ${config_file}: hdmi_blanking=0"
+}
+
+disable_lightdm_blanking() {
+  local dropin_dir="/etc/lightdm/lightdm.conf.d"
+  local dropin_file="${dropin_dir}/nilocardmed-no-blanking.conf"
+  if ! systemctl list-unit-files lightdm.service >/dev/null 2>&1; then
+    return 0
+  fi
+  mkdir -p "${dropin_dir}"
+  cat >"${dropin_file}" <<'EOF'
+# NiloCardmed: evitar apagado DPMS del servidor X (Screen Blanking)
+[Seat:*]
+xserver-command=X -s 0 -dpms s noblank
+EOF
+  log_info "lightdm: ${dropin_file}"
+}
+
+disable_desktop_power_management() {
+  local user=""
+  for user in pi "${SUDO_USER:-}"; do
+    [[ -n "${user}" && "${user}" != "root" ]] || continue
+    id "${user}" >/dev/null 2>&1 || continue
+    if ! command -v gsettings >/dev/null 2>&1; then
+      continue
+    fi
+    local uid dbus_addr=""
+    uid="$(id -u "${user}")"
+    if [[ -S "/run/user/${uid}/bus" ]]; then
+      dbus_addr="unix:path=/run/user/${uid}/bus"
+    fi
+    if sudo -u "${user}" DBUS_SESSION_BUS_ADDRESS="${dbus_addr}" \
+      gsettings set org.gnome.desktop.session idle-delay 0 2>/dev/null; then
+      log_info "gsettings (${user}): idle-delay=0"
+    fi
+    sudo -u "${user}" DBUS_SESSION_BUS_ADDRESS="${dbus_addr}" \
+      gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing' 2>/dev/null || true
+    sudo -u "${user}" DBUS_SESSION_BUS_ADDRESS="${dbus_addr}" \
+      gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing' 2>/dev/null || true
+  done
+}
+
+apply_active_tty_blanking_off() {
+  if command -v setterm >/dev/null 2>&1; then
+    for tty in /dev/tty[0-9]*; do
+      [[ -c "${tty}" ]] || continue
+      setterm -term linux -blank 0 -powerdown 0 -powersave off >"${tty}" 2>/dev/null || true
+    done
+    log_info "TTY activos: setterm blank=0 aplicado"
   fi
 }
 
@@ -115,16 +200,21 @@ main() {
     exit 1
   fi
 
-  log_info "=== Host always-on (sin suspender / blanking) ==="
+  log_info "=== Host always-on (sin suspender / blanking / pantalla negra) ==="
   write_logind_dropin
   mask_sleep_targets
   disable_console_blank
+  disable_hdmi_blanking
+  disable_raspi_screen_blanking
+  disable_lightdm_blanking
   disable_x_dpms
-  disable_raspi_blanking
+  disable_desktop_power_management
   ensure_kernel_consoleblank
+  apply_active_tty_blanking_off
 
   systemctl restart systemd-logind 2>/dev/null || true
-  log_info "Host configurado para operación continua (reinicio recomendado tras el primer install)"
+  log_info "Pantalla/consola: sin blanking (equiv. raspi-config Screen Blanking > No)"
+  log_info "Reinicio recomendado tras el primer install para hdmi_blanking/consoleblank"
 }
 
 main "$@"

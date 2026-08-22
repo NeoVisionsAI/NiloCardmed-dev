@@ -229,6 +229,12 @@ ensure_deploy_production_flags() {
   fi
 
   log_info "deploy.env: flags de producción aplicados (WiFi, BLE, hot-plug cámara)"
+  if [[ -z "$(read_env_value "${deploy_file}" "DISABLE_GUI" || true)" ]]; then
+    update_env_file "${deploy_file}" "DISABLE_GUI" "false"
+  fi
+  if [[ -z "$(read_env_value "${deploy_file}" "OPTIMIZE_GPU_MEM" || true)" ]]; then
+    update_env_file "${deploy_file}" "OPTIMIZE_GPU_MEM" "true"
+  fi
 }
 
 ensure_app_production_flags() {

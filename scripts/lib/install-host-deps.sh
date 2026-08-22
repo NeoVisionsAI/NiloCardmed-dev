@@ -335,6 +335,7 @@ install_host_dependencies() {
     if [[ "${EUID}" -eq 0 ]]; then
       ensure_host_always_on "${INSTALL_DIR:-${REPO_ROOT:-}}"
       ensure_host_swap "${INSTALL_DIR:-${REPO_ROOT:-}}"
+      ensure_host_memory_optimize "${INSTALL_DIR:-${REPO_ROOT:-}}"
     fi
     return 0
   fi
@@ -352,6 +353,7 @@ install_host_dependencies() {
   if [[ "${EUID}" -eq 0 ]]; then
     ensure_host_always_on "${INSTALL_DIR:-${REPO_ROOT:-}}"
     ensure_host_swap "${INSTALL_DIR:-${REPO_ROOT:-}}"
+    ensure_host_memory_optimize "${INSTALL_DIR:-${REPO_ROOT:-}}"
   fi
 
   log_info "=== Dependencias del host completadas ==="
