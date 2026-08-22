@@ -197,6 +197,8 @@ ensure_ap_firewall() {
     || iptables -I INPUT -i "${AP_INTERFACE}" -p udp --dport 67 -j ACCEPT
   iptables -C INPUT -i "${AP_INTERFACE}" -p udp --sport 68 -j ACCEPT 2>/dev/null \
     || iptables -I INPUT -i "${AP_INTERFACE}" -p udp --sport 68 -j ACCEPT
+  iptables -C INPUT -i "${AP_INTERFACE}" -p tcp --dport 8080 -j ACCEPT 2>/dev/null \
+    || iptables -I INPUT -i "${AP_INTERFACE}" -p tcp --dport 8080 -j ACCEPT
   if iptables -L DOCKER-USER >/dev/null 2>&1; then
     iptables -C DOCKER-USER -i "${AP_INTERFACE}" -j ACCEPT 2>/dev/null \
       || iptables -I DOCKER-USER -i "${AP_INTERFACE}" -j ACCEPT
@@ -790,6 +792,11 @@ status_ap() {
     echo "dhcp: escuchando UDP 67"
   else
     echo "dhcp: NO escucha UDP 67"
+  fi
+  if curl -sf --connect-timeout 3 "http://127.0.0.1:8080/api/status" >/dev/null 2>&1; then
+    echo "http: OK → http://${AP_IP}:8080/api/status"
+  else
+    echo "http: NO RESPONDE en :8080 (reinicia: sudo systemctl restart nilocardmed)"
   fi
   [[ -f "${LOG_DIR}/dnsmasq-start.log" ]] && echo "--- dnsmasq-start.log ---" \
     && tail -5 "${LOG_DIR}/dnsmasq-start.log" || true

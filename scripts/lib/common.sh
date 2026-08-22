@@ -612,6 +612,23 @@ repair_wifi_ap_dhcp_if_enabled() {
   return 1
 }
 
+# Reinicia el contenedor si HTTP :8080 no responde (aprovisionamiento WiFi).
+repair_http_provisioning_if_enabled() {
+  local install_dir="${1:-${INSTALL_DIR:-}}"
+
+  if [[ -f "${install_dir}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${install_dir}/deploy.env" && set +a
+  fi
+
+  if ! resolve_wifi_ap_enabled || [[ "${EUID}" -ne 0 ]]; then
+    return 0
+  fi
+
+  log_info "=== Comprobando HTTP aprovisionamiento (:8080) ==="
+  verify_http_provisioning "${install_dir}" || true
+}
+
 restart_wifi_ap_if_enabled() {
   local install_dir="${1:-${INSTALL_DIR:-}}"
 
@@ -683,7 +700,20 @@ verify_http_provisioning() {
     return 0
   fi
 
-  log_warn "HTTP :8080 no responde aún — espera 10 s y prueba: curl http://127.0.0.1:8080/api/status"
+  log_warn "HTTP :8080 no responde — reiniciando contenedor (1 intento)..."
+  local service_name="${NILOCARDMED_SERVICE_NAME:-nilocardmed}"
+  if systemctl is-active --quiet "${service_name}.service" 2>/dev/null; then
+    run_with_timeout 60 systemctl restart "${service_name}.service" || true
+    sleep 5
+  fi
+
+  if curl -sf --connect-timeout 8 "http://127.0.0.1:8080/api/status" >/dev/null 2>&1; then
+    log_info "HTTP aprovisionamiento OK tras reinicio → http://192.168.4.1:8080/api/status"
+    return 0
+  fi
+
+  log_warn "HTTP :8080 sigue sin responder — prueba: curl http://127.0.0.1:8080/api/status"
   log_warn "Revisa: sudo docker logs ${cname} 2>&1 | tail -30"
+  log_warn "Repara: sudo systemctl restart ${service_name} && sudo /opt/nilocardmed/scripts/wifi-ap-run.sh repair-dhcp"
   return 1
 }

@@ -182,6 +182,7 @@ fi
 
 verify_http_provisioning "${INSTALL_DIR}" || true
 restart_wifi_ap_if_enabled "${INSTALL_DIR}"
+repair_http_provisioning_if_enabled "${INSTALL_DIR}"
 
 if ! is_true "${SKIP_HOST_TUNING:-false}"; then
   log_info "=== Restaurar escritorio tras build (lightdm) ==="

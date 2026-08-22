@@ -171,11 +171,18 @@ def run_daemon() -> int:
             config.bluetooth,
         )
         http_service.start(shutdown)
-        logger.info(
-            "Servidor HTTP de aprovisionamiento activo (puerto=%s, ap_ip=%s)",
-            config.http.port,
-            config.http.ap_ip if config.http.bind_ap_only else config.http.host,
-        )
+        if http_service.is_active:
+            logger.info(
+                "Servidor HTTP de aprovisionamiento activo (puerto=%s, bind=%s)",
+                config.http.port,
+                http_service.bind_address,
+            )
+        else:
+            logger.error(
+                "Servidor HTTP NO arrancó (puerto=%s) — comprueba: ss -tlnp | grep :%s",
+                config.http.port,
+                config.http.port,
+            )
     else:
         logger.info("HTTP de aprovisionamiento deshabilitado")
 

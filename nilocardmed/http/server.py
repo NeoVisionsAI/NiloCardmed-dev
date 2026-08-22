@@ -266,21 +266,33 @@ def create_http_server(
     _Handler.config_manager = config_manager
     _Handler.bluetooth_settings = bluetooth_settings
 
-    bind_host = settings.ap_ip if settings.bind_ap_only else settings.host
-    try:
-        server = ThreadingHTTPServer((bind_host, settings.port), _Handler)
-    except OSError as exc:
-        if settings.bind_ap_only and bind_host not in ("0.0.0.0", ""):
-            logger.warning(
-                "HTTP no pudo enlazar en %s:%s (%s); usando %s",
-                bind_host,
-                settings.port,
-                exc,
-                settings.host,
-            )
-            server = ThreadingHTTPServer((settings.host, settings.port), _Handler)
-        else:
-            raise
+    bind_host = settings.host
+    if settings.bind_ap_only and settings.ap_ip:
+        bind_host = settings.ap_ip
+
+    bind_attempts = [bind_host]
+    if bind_host not in ("0.0.0.0", ""):
+        bind_attempts.append(settings.host or "0.0.0.0")
+
+    server: ThreadingHTTPServer | None = None
+    last_error: OSError | None = None
+    for host in bind_attempts:
+        try:
+            server = ThreadingHTTPServer((host, settings.port), _Handler)
+            if host != bind_host:
+                logger.warning(
+                    "HTTP enlazado en %s:%s (fallback desde %s)",
+                    host,
+                    settings.port,
+                    bind_host,
+                )
+            break
+        except OSError as exc:
+            last_error = exc
+            logger.warning("HTTP no pudo enlazar en %s:%s (%s)", host, settings.port, exc)
+
+    if server is None:
+        raise last_error or OSError("No se pudo enlazar el servidor HTTP")
     server.allow_reuse_address = True
     server.daemon_threads = True
     return server
@@ -302,6 +314,10 @@ class HttpProvisioningService:
         self._bluetooth_settings = bluetooth_settings
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
+
+    @property
+    def is_active(self) -> bool:
+        return self._thread is not None and self._thread.is_alive() and self._server is not None
 
     def start(self, shutdown: threading.Event) -> None:
         if not self.settings.enabled:
@@ -337,6 +353,13 @@ class HttpProvisioningService:
 
         self._thread = threading.Thread(target=_runner, name="http-provision", daemon=True)
         self._thread.start()
+
+    @property
+    def bind_address(self) -> str:
+        if self._server is None:
+            return "?"
+        host, port = self._server.server_address[:2]
+        return f"{host}:{port}"
 
     def stop(self) -> None:
         if self._server is not None:
