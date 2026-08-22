@@ -104,7 +104,7 @@ Con **`install.sh`**, la contraseña BLE y el nombre del dispositivo se configur
 nano .env   # NILOCARDMED_SER__URL=https://tu-servidor/api/samples
 ```
 
-En **reinstalaciones**, el uuid del dispositivo se mantiene si existe `device-identity.env` (mismo id en SER y en el nombre BLE). Al pedir contraseña: Enter = mantener la actual; Enter sin contraseña previa = generar nueva.
+En **reinstalaciones**, el uuid del dispositivo se mantiene si existe `device-identity.env` (mismo id en SER y en el nombre BLE). Al pedir contraseña BLE: si ya hay una configurada, **Enter** o **10 s sin escribir** = mantener la actual; en la **primera instalación** hay que introducirla obligatoriamente.
 
 **No hace falta poner WiFi aquí.** El operador lo configurará desde la tablet (`wifi_scan` → `wifi_connect`). Lo mismo con intervalo de muestreo, ventana horaria y datos CardMed.
 

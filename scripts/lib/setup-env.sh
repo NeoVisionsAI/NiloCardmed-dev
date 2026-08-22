@@ -64,6 +64,39 @@ generate_bluetooth_password() {
   fi
 }
 
+# Lee un secreto desde /dev/tty. Con timeout > 0, caduca y deja el valor vacío.
+read_secret_from_tty() {
+  local prompt="$1"
+  local timeout_seconds="${2:-0}"
+  local __var_name="$3"
+  local value=""
+  local rc=0
+
+  if [[ "${timeout_seconds}" -gt 0 ]]; then
+    if read -rsp -t "${timeout_seconds}" "${prompt}" value </dev/tty; then
+      rc=0
+    else
+      rc=$?
+      value=""
+    fi
+  else
+    if read -rsp "${prompt}" value </dev/tty; then
+      rc=0
+    else
+      rc=$?
+      value=""
+    fi
+  fi
+  echo >/dev/tty
+  printf -v "${__var_name}" '%s' "${value}"
+  return "${rc}"
+}
+
+has_existing_bluetooth_password() {
+  local existing="$1"
+  [[ -n "${existing}" && "${existing}" != "changeme" ]]
+}
+
 load_or_create_device_identity() {
   local data_dir="$1"
   local identity_file="${data_dir}/device-identity.env"
@@ -103,9 +136,11 @@ prompt_bluetooth_password() {
   local password=""
   local confirm=""
   if [[ -t 0 ]] || [[ -r /dev/tty ]]; then
-    if [[ -n "${existing}" && "${existing}" != "changeme" ]]; then
-      read -rsp "Contraseña Bluetooth [Enter=mantener la actual]: " password </dev/tty || true
-      echo >/dev/tty
+    if has_existing_bluetooth_password "${existing}"; then
+      read_secret_from_tty \
+        "Contraseña Bluetooth [Enter=mantener la actual; 10 s sin entrada=mantener]: " \
+        10 \
+        password || true
       if [[ -z "${password}" ]]; then
         password="${existing}"
         log_info "Contraseña Bluetooth: se mantiene la existente"
@@ -113,38 +148,46 @@ prompt_bluetooth_password() {
         return 0
       fi
     else
-      read -rsp "Contraseña Bluetooth [Enter=generar automática]: " password </dev/tty || true
-      echo >/dev/tty
+      read_secret_from_tty \
+        "Contraseña Bluetooth [obligatoria la primera vez]: " \
+        0 \
+        password || true
       if [[ -z "${password}" ]]; then
-        password="$(generate_bluetooth_password)"
-        log_info "Contraseña Bluetooth generada: ${password}"
-        log_info "Guárdala: la necesitarás en la app tablet."
-        export BLUETOOTH_PASSWORD="${password}"
-        return 0
+        log_error "La contraseña Bluetooth es obligatoria en la primera instalación."
+        while [[ -z "${password}" ]]; do
+          read_secret_from_tty "Contraseña Bluetooth: " 0 password || true
+          if [[ -z "${password}" ]]; then
+            log_error "La contraseña no puede estar vacía."
+          fi
+        done
       fi
     fi
 
     while true; do
-      read -rsp "Repite la contraseña Bluetooth: " confirm </dev/tty || true
-      echo >/dev/tty
+      read_secret_from_tty "Repite la contraseña Bluetooth: " 0 confirm || true
       if [[ "${password}" == "${confirm}" ]]; then
         break
       fi
       log_error "Las contraseñas no coinciden. Vuelve a intentarlo."
+      password=""
       while [[ -z "${password}" ]]; do
-        read -rsp "Contraseña Bluetooth: " password </dev/tty || true
-        echo >/dev/tty
+        read_secret_from_tty "Contraseña Bluetooth: " 0 password || true
         if [[ -z "${password}" ]]; then
-          log_error "La contraseña no puede estar vacía (Enter solo en el primer prompt para generar o mantener)."
+          log_error "La contraseña no puede estar vacía."
         fi
       done
     done
   fi
 
   if [[ -z "${password}" ]]; then
-    password="$(generate_bluetooth_password)"
-    log_info "Contraseña Bluetooth generada: ${password}"
-    log_info "Guárdala: la necesitarás en la app tablet."
+    if has_existing_bluetooth_password "${existing}"; then
+      password="${existing}"
+      log_info "Contraseña Bluetooth: se mantiene la existente (sin TTY)"
+    else
+      password="$(generate_bluetooth_password)"
+      log_info "Contraseña Bluetooth generada: ${password}"
+      log_info "Guárdala: la necesitarás en la app tablet."
+    fi
   fi
 
   export BLUETOOTH_PASSWORD="${password}"

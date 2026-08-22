@@ -284,6 +284,73 @@ class BluezBluetoothBackend(BluetoothBackend):
             logger.debug("No se pudo comprobar LE advertising: %s", exc)
         return True
 
+    def _prepare_le_advertisement(self, ble, *, recreate: bool = False) -> None:
+        from nilocardmed.bluetooth.advertising_status import (
+            purge_stale_bluez_registrations,
+            unregister_le_advertisement_path,
+        )
+
+        adapter_address = getattr(ble.dongle, "address", None)
+        advert_path = str(ble.advert.get_path())
+        self._purge_stale_advertisement(ble)
+        unregister_le_advertisement_path(advert_path, adapter_address=adapter_address)
+        purge_stale_bluez_registrations(adapter_address, aggressive=True)
+        if recreate:
+            try:
+                ble.advert.remove_from_connection()
+            except Exception as exc:
+                logger.debug("remove advert antes de recrear: %s", exc)
+            ble._create_advertisement()
+            self._trim_advertisement_for_legacy_adv(ble)
+        time.sleep(0.5)
+
+    def _register_le_advertisement(
+        self,
+        ble,
+        *,
+        on_ok: Callable[[], None],
+        on_err: Callable[[object], None],
+        prepare: bool = False,
+        recreate_on_prepare: bool = False,
+    ) -> None:
+        import dbus
+
+        from nilocardmed.bluetooth.advertising_status import is_le_advertisement_registered
+
+        if prepare:
+            self._prepare_le_advertisement(ble, recreate=recreate_on_prepare)
+
+        advert_path = str(ble.advert.get_path())
+
+        def _err_handler(error) -> None:
+            error_text = str(error)
+            if "AlreadyExists" in error_text:
+                if is_le_advertisement_registered(advert_path):
+                    logger.info("LE advertisement ya registrado en BlueZ (%s)", advert_path)
+                    on_ok()
+                    return
+                try:
+                    from nilocardmed.bluetooth.advertising_status import read_le_advertising_state
+
+                    le_state = read_le_advertising_state(timeout=2.0)
+                    if le_state.get("le_advertising_active"):
+                        logger.info(
+                            "BlueZ AlreadyExists con LE activo (ActiveInstances=%s); continuando",
+                            le_state.get("active_instances"),
+                        )
+                        on_ok()
+                        return
+                except Exception as exc:
+                    logger.debug("Comprobación LE tras AlreadyExists: %s", exc)
+            on_err(error)
+
+        ble.ad_manager.advert_mngr_methods.RegisterAdvertisement(
+            advert_path,
+            dbus.Dictionary({}, signature="sv"),
+            reply_handler=on_ok,
+            error_handler=_err_handler,
+        )
+
     def _purge_stale_advertisement(self, ble) -> None:
         try:
             ble.ad_manager.unregister_advertisement(ble.advert)
@@ -351,12 +418,13 @@ class BluezBluetoothBackend(BluetoothBackend):
             )
             logger.info("GATT BLE registrado y publicando (GATT + advertisement OK)")
 
-        def _register_advertisement() -> None:
-            ble.ad_manager.advert_mngr_methods.RegisterAdvertisement(
-                ble.advert.get_path(),
-                dbus.Dictionary({}, signature="sv"),
-                reply_handler=_on_advert_ok,
-                error_handler=_on_advert_err,
+        def _register_advertisement(*, prepare: bool = False, recreate: bool = False) -> None:
+            self._register_le_advertisement(
+                ble,
+                on_ok=_on_advert_ok,
+                on_err=_on_advert_err,
+                prepare=prepare,
+                recreate_on_prepare=recreate,
             )
 
         def _on_gatt_ok() -> None:
@@ -382,19 +450,13 @@ class BluezBluetoothBackend(BluetoothBackend):
         def _on_advert_err(error) -> None:
             advert_attempts["count"] += 1
             message = f"Failed to register advertisement: {error}"
-            if advert_attempts["count"] <= 2:
+            if advert_attempts["count"] <= 3:
                 logger.warning(
-                    "%s; limpiando anuncios huérfanos y reintentando (%s/2)",
+                    "%s; limpiando anuncios huérfanos y reintentando (%s/3)",
                     message,
                     advert_attempts["count"],
                 )
-                purge_stale_bluez_registrations(
-                    getattr(ble.dongle, "address", None),
-                    aggressive=True,
-                )
-                self._purge_stale_advertisement(ble)
-                time.sleep(1.0)
-                _register_advertisement()
+                _register_advertisement(prepare=True, recreate=True)
                 return
 
             failure_messages.append(message)
@@ -432,10 +494,10 @@ class BluezBluetoothBackend(BluetoothBackend):
                 le_state = read_le_advertising_state(timeout=2.0)
                 if not le_state.get("le_advertising_active"):
                     logger.warning(
-                        "Watchdog BLE: anuncio LE inactivo (ActiveInstances=%s); re-registrando",
+                        "Watchdog BLE: anuncio LE inactivo (ActiveInstances=%s); restaurando",
                         le_state.get("active_instances"),
                     )
-                    _register_advertisement()
+                    self._refresh_le_advertising()
             return True
 
         GLib.timeout_add_seconds(15, _periodic_ble_maintenance)
@@ -489,6 +551,16 @@ class BluezBluetoothBackend(BluetoothBackend):
         except Exception as exc:
             logger.debug("remove advertisement: %s", exc)
 
+        try:
+            from nilocardmed.bluetooth.advertising_status import purge_stale_bluez_registrations
+
+            adapter_address = getattr(getattr(ble, "dongle", None), "address", None)
+            removed = purge_stale_bluez_registrations(adapter_address, aggressive=True)
+            if removed:
+                logger.info("Limpieza BlueZ tras apagado: %s registro(s) eliminado(s)", removed)
+        except Exception as exc:
+            logger.debug("purge tras apagado BLE: %s", exc)
+
         time.sleep(0.5)
 
     def _run_pending_mainloop_actions(self) -> None:
@@ -520,18 +592,20 @@ class BluezBluetoothBackend(BluetoothBackend):
             "Restaurando anuncio LE (ActiveInstances=%s)",
             le_state.get("active_instances"),
         )
-        self._purge_stale_advertisement(ble)
-        purge_stale_bluez_registrations(
-            getattr(ble.dongle, "address", None),
-            aggressive=True,
-        )
-        import dbus
 
-        ble.ad_manager.advert_mngr_methods.RegisterAdvertisement(
-            ble.advert.get_path(),
-            dbus.Dictionary({}, signature="sv"),
-            reply_handler=lambda: logger.info("LE advertisement restaurado"),
-            error_handler=lambda err: logger.error("Restore advertisement failed: %s", err),
+        def _on_refresh_ok() -> None:
+            self._advert_registered.set()
+            logger.info("LE advertisement restaurado")
+
+        def _on_refresh_err(error) -> None:
+            logger.error("Restore advertisement failed: %s", error)
+
+        self._register_le_advertisement(
+            ble,
+            on_ok=_on_refresh_ok,
+            on_err=_on_refresh_err,
+            prepare=True,
+            recreate_on_prepare=True,
         )
 
     def _run_peripheral(self, shutdown: threading.Event) -> None:

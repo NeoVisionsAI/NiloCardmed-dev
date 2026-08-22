@@ -43,6 +43,61 @@ def read_le_advertising_state(*, timeout: float = 5.0) -> dict[str, Any]:
     }
 
 
+def is_le_advertisement_registered(advert_path: str) -> bool:
+    """Indica si ``advert_path`` sigue publicado en BlueZ."""
+    try:
+        import dbus
+    except ImportError:
+        return False
+
+    try:
+        bus = dbus.SystemBus()
+        om = dbus.Interface(
+            bus.get_object(BLUEZ_SERVICE, "/"),
+            DBUS_OM_IFACE,
+        )
+        objects = om.GetManagedObjects()
+        for path, interfaces in objects.items():
+            if str(path) == advert_path and LE_ADVERT_IFACE in interfaces:
+                return True
+        return False
+    except Exception as exc:
+        logger.debug("No se pudo comprobar LEAdvertisement %s: %s", advert_path, exc)
+        return False
+
+
+def unregister_le_advertisement_path(
+    advert_path: str,
+    *,
+    adapter_address: str | None = None,
+) -> bool:
+    """Desregistra un anuncio LE concreto si el manager del adaptador está disponible."""
+    try:
+        import dbus
+    except ImportError:
+        return False
+
+    from bluezero import dbus_tools
+
+    try:
+        bus = dbus.SystemBus()
+        adapter_path = None
+        if adapter_address:
+            adapter_path = dbus_tools.get_dbus_path(adapter=adapter_address)
+        if adapter_path is None:
+            return False
+        ad_manager = dbus.Interface(
+            bus.get_object(BLUEZ_SERVICE, adapter_path),
+            LE_ADVERTISING_MANAGER_IFACE,
+        )
+        ad_manager.UnregisterAdvertisement(advert_path)
+        logger.info("LE advertisement desregistrado: %s", advert_path)
+        return True
+    except Exception as exc:
+        logger.debug("UnregisterAdvertisement %s: %s", advert_path, exc)
+        return False
+
+
 def purge_stale_bluez_registrations(
     adapter_address: str | None = None,
     *,
