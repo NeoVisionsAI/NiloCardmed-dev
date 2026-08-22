@@ -56,8 +56,8 @@ def run_wifi_cli(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "scan":
-            networks = service.scan()
-            print(json.dumps([item.to_dict() for item in networks], ensure_ascii=False, indent=2))
+            result = service.scan()
+            print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
             return 0
 
         if args.command == "status":

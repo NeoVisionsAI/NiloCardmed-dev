@@ -42,11 +42,36 @@ def run_nmcli(*args: str, timeout: int = 30) -> subprocess.CompletedProcess[str]
 
 
 def scan() -> dict:
-    subprocess.run(
-        ["nmcli", "dev", "wifi", "rescan", "ifname", INTERFACE],
-        check=False,
-        capture_output=True,
+    force_rescan = os.environ.get("WIFI_SCAN_RESCAN", "").lower() in ("1", "true", "yes")
+    rescan_when_connected = os.environ.get("WIFI_SCAN_RESCAN_WHEN_CONNECTED", "").lower() in (
+        "1",
+        "true",
+        "yes",
     )
+
+    connected = False
+    state_output = subprocess.run(
+        ["nmcli", "-t", "-f", "GENERAL.STATE", "dev", "show", INTERFACE],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if state_output.returncode == 0:
+        connected = "(connected)" in state_output.stdout.lower()
+
+    scan_mode = "list"
+    if connected and not (force_rescan and rescan_when_connected):
+        # Pi con radio única: rescan activo puede cortar SSH/internet.
+        scan_mode = "cached_connected"
+    elif force_rescan or not connected:
+        subprocess.run(
+            ["nmcli", "dev", "wifi", "rescan", "ifname", INTERFACE],
+            check=False,
+            capture_output=True,
+        )
+        scan_mode = "rescan" if not connected else "rescan_connected"
+
     output = run_nmcli(
         "-t",
         "-f",
@@ -77,7 +102,11 @@ def scan() -> dict:
             "frequency_mhz": freq,
         }
     ordered = sorted(networks.values(), key=lambda item: item.get("signal") or 0, reverse=True)
-    return {"networks": ordered}
+    return {
+        "networks": ordered,
+        "scan_mode": scan_mode,
+        "connected_preserved": connected and scan_mode == "cached_connected",
+    }
 
 
 def status() -> dict:
@@ -103,7 +132,7 @@ def status() -> dict:
             ip_address = line.split(":", 1)[1].strip().split("/")[0]
         elif line.startswith("IP4.GATEWAY:"):
             gateway = line.split(":", 1)[1].strip()
-    connected = "connected" in state.lower()
+    connected = "(connected)" in state.lower()
     return {
         "interface": INTERFACE,
         "connected": connected,

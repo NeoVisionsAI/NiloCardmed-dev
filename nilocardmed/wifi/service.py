@@ -10,7 +10,7 @@ from nilocardmed.config.manager import ConfigManager
 from nilocardmed.config.models import WifiSettings
 from nilocardmed.wifi.backends import WifiBackend, select_backend
 from nilocardmed.wifi.exceptions import WifiConfigError, WifiConnectionError, WifiError
-from nilocardmed.wifi.models import WifiNetwork, WifiStatus
+from nilocardmed.wifi.models import WifiNetwork, WifiScanResult, WifiStatus
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +36,13 @@ class WifiService:
             self._backend = select_backend(self.settings)
         return self._backend
 
-    def scan(self) -> list[WifiNetwork]:
-        logger.info("Escaneando redes WiFi (backend=%s)", self.backend.name)
-        return self.backend.scan()
+    def scan(self, *, rescan: bool = False) -> WifiScanResult:
+        logger.info(
+            "Escaneando redes WiFi (backend=%s, rescan=%s)",
+            self.backend.name,
+            rescan,
+        )
+        return self.backend.scan(rescan=rescan)
 
     def status(self, *, check_connectivity: bool | None = None) -> WifiStatus:
         status = self.backend.status()

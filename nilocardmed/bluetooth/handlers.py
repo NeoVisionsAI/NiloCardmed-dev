@@ -251,14 +251,19 @@ def handle_sampling_set_window(ctx: CommandContext, request: CommandRequest) -> 
     }
 
 
-def handle_wifi_scan(ctx: CommandContext, _request: CommandRequest) -> dict[str, Any]:
+def handle_wifi_scan(ctx: CommandContext, request: CommandRequest) -> dict[str, Any]:
     config = ctx.config_manager.get()
     service = WifiService(config.wifi, config_manager=ctx.config_manager)
+    rescan = bool(request.payload.get("rescan", False))
     try:
-        networks = service.scan()
+        result = service.scan(rescan=rescan)
     except WifiError as exc:
         raise BluetoothCommandError("wifi_error", str(exc)) from exc
-    return {"networks": [network.to_dict() for network in networks]}
+    return {
+        "networks": [network.to_dict() for network in result.networks],
+        "scan_mode": result.scan_mode,
+        "connected_preserved": result.connected_preserved,
+    }
 
 
 def handle_wifi_connect(ctx: CommandContext, request: CommandRequest) -> dict[str, Any]:

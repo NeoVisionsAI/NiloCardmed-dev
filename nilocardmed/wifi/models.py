@@ -27,6 +27,22 @@ class WifiNetwork:
 
 
 @dataclass(frozen=True, slots=True)
+class WifiScanResult:
+    """Resultado de escaneo WiFi (lista + metadatos de cómo se obtuvo)."""
+
+    networks: list[WifiNetwork]
+    scan_mode: str = "list"
+    connected_preserved: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "networks": [network.to_dict() for network in self.networks],
+            "scan_mode": self.scan_mode,
+            "connected_preserved": self.connected_preserved,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class WifiStatus:
     """Estado actual de la interfaz WiFi."""
 

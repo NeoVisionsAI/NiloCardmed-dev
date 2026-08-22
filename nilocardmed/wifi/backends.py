@@ -14,7 +14,7 @@ import httpx
 
 from nilocardmed.config.models import WifiSettings
 from nilocardmed.wifi.exceptions import WifiBackendError, WifiConfigError, WifiConnectionError
-from nilocardmed.wifi.models import WifiNetwork, WifiStatus
+from nilocardmed.wifi.models import WifiNetwork, WifiScanResult, WifiStatus
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class WifiBackend(ABC):
         self.settings = settings
 
     @abstractmethod
-    def scan(self) -> list[WifiNetwork]:
+    def scan(self, *, rescan: bool = False) -> WifiScanResult:
         raise NotImplementedError
 
     @abstractmethod
@@ -65,7 +65,12 @@ class HostScriptBackend(WifiBackend):
 
     name = "host_script"
 
-    def _run(self, *args: str, password: str | None = None) -> dict:
+    def _run(
+        self,
+        *args: str,
+        password: str | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> dict:
         script = Path(self.settings.host_script_path)
         if not script.exists():
             raise WifiBackendError(f"Script WiFi no encontrado: {script}")
@@ -78,6 +83,8 @@ class HostScriptBackend(WifiBackend):
         env["WIFI_CONNECT_TIMEOUT"] = str(self.settings.connect_timeout_seconds)
         if password is not None:
             env["WIFI_PASSWORD"] = password
+        if extra_env:
+            env.update(extra_env)
 
         try:
             result = subprocess.run(
@@ -105,9 +112,19 @@ class HostScriptBackend(WifiBackend):
         except json.JSONDecodeError as exc:
             raise WifiBackendError(f"Salida JSON inválida del script WiFi: {output[:200]}") from exc
 
-    def scan(self) -> list[WifiNetwork]:
-        payload = self._run("scan")
-        return [_network_from_dict(item) for item in payload.get("networks", [])]
+    def scan(self, *, rescan: bool = False) -> WifiScanResult:
+        extra_env: dict[str, str] = {}
+        if rescan:
+            extra_env["WIFI_SCAN_RESCAN"] = "1"
+        if self.settings.scan_rescan_when_connected:
+            extra_env["WIFI_SCAN_RESCAN_WHEN_CONNECTED"] = "1"
+        payload = self._run("scan", extra_env=extra_env)
+        networks = [_network_from_dict(item) for item in payload.get("networks", [])]
+        return WifiScanResult(
+            networks=networks,
+            scan_mode=str(payload.get("scan_mode", "list")),
+            connected_preserved=bool(payload.get("connected_preserved", False)),
+        )
 
     def status(self) -> WifiStatus:
         payload = self._run("status")
@@ -153,8 +170,52 @@ class NmcliBackend(WifiBackend):
             raise WifiBackendError(message)
         return result.stdout
 
-    def scan(self) -> list[WifiNetwork]:
-        self._run_nmcli("dev", "wifi", "rescan", "ifname", self.settings.interface, timeout=10)
+    def _interface_connected(self) -> bool:
+        try:
+            output = self._run_nmcli(
+                "-t",
+                "-f",
+                "GENERAL.STATE",
+                "dev",
+                "show",
+                self.settings.interface,
+                timeout=5,
+            )
+        except WifiBackendError:
+            return False
+        return "(connected)" in output.lower()
+
+    def scan(self, *, rescan: bool = False) -> WifiScanResult:
+        connected = self._interface_connected()
+        scan_mode = "cached"
+        allow_rescan = rescan or self.settings.scan_rescan_when_connected
+        if allow_rescan and (not connected or self.settings.scan_rescan_when_connected):
+            self._run_nmcli(
+                "dev",
+                "wifi",
+                "rescan",
+                "ifname",
+                self.settings.interface,
+                timeout=10,
+            )
+            scan_mode = "rescan"
+        elif connected:
+            scan_mode = "cached_connected"
+            logger.info(
+                "wifi_scan: omitiendo rescan en %s (WiFi conectado; preserva enlace)",
+                self.settings.interface,
+            )
+        else:
+            self._run_nmcli(
+                "dev",
+                "wifi",
+                "rescan",
+                "ifname",
+                self.settings.interface,
+                timeout=10,
+            )
+            scan_mode = "rescan"
+
         output = self._run_nmcli(
             "-t",
             "-f",
@@ -186,7 +247,12 @@ class NmcliBackend(WifiBackend):
                 bssid=bssid,
                 frequency_mhz=freq,
             )
-        return sorted(networks.values(), key=lambda item: item.signal or 0, reverse=True)
+        ordered = sorted(networks.values(), key=lambda item: item.signal or 0, reverse=True)
+        return WifiScanResult(
+            networks=ordered,
+            scan_mode=scan_mode,
+            connected_preserved=connected and scan_mode == "cached_connected",
+        )
 
     def status(self) -> WifiStatus:
         output = self._run_nmcli(
@@ -212,7 +278,7 @@ class NmcliBackend(WifiBackend):
             elif line.startswith("IP4.GATEWAY:"):
                 gateway = line.split(":", 1)[1].strip()
 
-        connected = bool(state and "connected" in state.lower())
+        connected = bool(state and "(connected)" in state.lower())
         return WifiStatus(
             interface=self.settings.interface,
             connected=connected,
@@ -247,12 +313,13 @@ class MockBackend(WifiBackend):
         self._connected_ssid: str | None = settings.ssid
         self._ip_address = "192.168.50.10" if settings.ssid else None
 
-    def scan(self) -> list[WifiNetwork]:
-        return [
+    def scan(self, *, rescan: bool = False) -> WifiScanResult:
+        networks = [
             WifiNetwork(ssid="NiloCardmed-Lab", signal=82, security="WPA2"),
             WifiNetwork(ssid="SER-Guest", signal=64, security="WPA2"),
             WifiNetwork(ssid="OpenNetwork", signal=40, security="OPEN"),
         ]
+        return WifiScanResult(networks=networks, scan_mode="mock", connected_preserved=True)
 
     def status(self) -> WifiStatus:
         return WifiStatus(

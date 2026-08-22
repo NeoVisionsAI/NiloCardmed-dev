@@ -151,6 +151,13 @@ class WifiSettings(BaseModel):
     connectivity_timeout_seconds: int = Field(default=10, ge=1, le=60)
     persist_to_config: bool = True
     auto_connect_on_startup: bool = False
+    scan_rescan_when_connected: bool = Field(
+        default=False,
+        description=(
+            "Si false (recomendado en Pi), wifi_scan no fuerza rescan con WiFi conectado "
+            "(evita caída de SSH/internet en radio única)"
+        ),
+    )
 
 
 class SamplingSettings(BaseModel):
