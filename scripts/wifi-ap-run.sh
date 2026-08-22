@@ -181,6 +181,28 @@ assign_ap_ip() {
     ip addr add "${AP_IP}/${AP_CIDR}" dev "${AP_INTERFACE}" 2>/dev/null || true
   fi
   ip link set "${AP_INTERFACE}" up 2>/dev/null || true
+  if [[ -f "/proc/sys/net/ipv6/conf/${AP_INTERFACE}/disable_ipv6" ]]; then
+    echo 1 >"/proc/sys/net/ipv6/conf/${AP_INTERFACE}/disable_ipv6" 2>/dev/null || true
+  fi
+}
+
+ensure_ap_firewall() {
+  # Docker en la Pi suele insertar reglas iptables que bloquean DHCP en uap0.
+  if ! command -v iptables >/dev/null 2>&1; then
+    return 0
+  fi
+  iptables -C INPUT -i "${AP_INTERFACE}" -j ACCEPT 2>/dev/null \
+    || iptables -I INPUT -i "${AP_INTERFACE}" -j ACCEPT
+  iptables -C INPUT -i "${AP_INTERFACE}" -p udp --dport 67 -j ACCEPT 2>/dev/null \
+    || iptables -I INPUT -i "${AP_INTERFACE}" -p udp --dport 67 -j ACCEPT
+  iptables -C INPUT -i "${AP_INTERFACE}" -p udp --sport 68 -j ACCEPT 2>/dev/null \
+    || iptables -I INPUT -i "${AP_INTERFACE}" -p udp --sport 68 -j ACCEPT
+  if iptables -L DOCKER-USER >/dev/null 2>&1; then
+    iptables -C DOCKER-USER -i "${AP_INTERFACE}" -j ACCEPT 2>/dev/null \
+      || iptables -I DOCKER-USER -i "${AP_INTERFACE}" -j ACCEPT
+    iptables -C DOCKER-USER -o "${AP_INTERFACE}" -j ACCEPT 2>/dev/null \
+      || iptables -I DOCKER-USER -o "${AP_INTERFACE}" -j ACCEPT
+  fi
 }
 
 prepare_ap_link() {
@@ -218,6 +240,7 @@ lines = [
     "hw_mode=g",
     f"channel={channel}",
     "macaddr_acl=0",
+    "ap_isolate=0",
     "auth_algs=1",
     "ignore_broadcast_ssid=0",
     "wpa=2",
@@ -256,9 +279,10 @@ EOF
 interface=${AP_INTERFACE}
 bind-interfaces
 except-interface=lo
-listen-address=${AP_IP}
 port=0
 dhcp-authoritative
+dhcp-broadcast
+log-dhcp
 dhcp-range=192.168.4.10,192.168.4.50,255.255.255.0,12h
 dhcp-option=3,${AP_IP}
 dhcp-option=6,${AP_IP}
@@ -331,12 +355,13 @@ start_dnsmasq_cli_fallback() {
     --interface="${AP_INTERFACE}" \
     --bind-interfaces \
     --except-interface=lo \
-    --listen-address="${AP_IP}" \
     -p 0 \
+    --dhcp-authoritative \
+    --dhcp-broadcast \
+    --log-dhcp \
     --dhcp-range=192.168.4.10,192.168.4.50,255.255.255.0,12h \
     --dhcp-option=3,"${AP_IP}" \
     --dhcp-option=6,"${AP_IP}" \
-    --log-dhcp \
     -x "${RUN_DIR}/dnsmasq.pid" \
     >>"${LOG_DIR}/dnsmasq-start.log" 2>&1
 }
@@ -390,6 +415,7 @@ start_dnsmasq() {
   systemctl stop dnsmasq.service 2>/dev/null || true
   systemctl disable dnsmasq.service 2>/dev/null || true
   assign_ap_ip
+  ensure_ap_firewall
 
   if ! ip link show "${AP_INTERFACE}" 2>/dev/null | grep -q "UP"; then
     log_error "${AP_INTERFACE} no está UP — no se puede arrancar dnsmasq"
@@ -430,6 +456,7 @@ repair_dhcp() {
     return 1
   fi
   assign_ap_ip
+  ensure_ap_firewall
   write_dnsmasq_conf bind-interfaces
   if start_dnsmasq; then
     log "DHCP reparado. Conecta la tablet y mira: sudo tail -f ${LOG_DIR}/dnsmasq-start.log"
@@ -454,6 +481,7 @@ start_hostapd_with_fallback() {
   local ieee11n conf="${CONFIG_DIR}/hostapd.conf"
 
   prepare_ap_link
+  ensure_ap_firewall
 
   for ieee11n in 0 1; do
     stop_hostapd
@@ -613,6 +641,10 @@ diagnose_ap() {
   [[ -f "${LOG_DIR}/hostapd.log" ]] && tail -20 "${LOG_DIR}/hostapd.log" || log_warn "Sin ${LOG_DIR}/hostapd.log"
   [[ -f "${LOG_DIR}/dnsmasq-start.log" ]] && tail -15 "${LOG_DIR}/dnsmasq-start.log" || log_warn "Sin ${LOG_DIR}/dnsmasq-start.log"
   ss -ulnp 2>/dev/null | grep -E ':67|:53' || log_warn "Sin dnsmasq en UDP 67 (DHCP)"
+  pgrep -a dnsmasq 2>/dev/null || log_warn "Sin proceso dnsmasq"
+  log "Si la tablet pide IP pero falla, conéctala y ejecuta en otra terminal:"
+  log "  sudo tail -f ${LOG_DIR}/dnsmasq-start.log"
+  log "Debes ver DHCPDISCOVER / DHCPOFFER / DHCPACK al conectar."
   [[ -f "${LOG_DIR}/iw-add.err" ]] && cat "${LOG_DIR}/iw-add.err" || true
 }
 
