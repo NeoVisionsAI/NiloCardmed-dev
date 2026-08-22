@@ -15,6 +15,11 @@ AP_CIDR="${WIFI_AP_CIDR:-24}"
 AP_SSID_PREFIX="${WIFI_AP_SSID_PREFIX:-Nilocardmed-Config}"
 WIFI_COUNTRY="${WIFI_COUNTRY_CODE:-ES}"
 
+# Rellenados por prepare_ap_core
+AP_SSID=""
+AP_CHANNEL=""
+AP_PASSWORD=""
+
 log() { echo "[nilocardmed-wifi-ap] $*"; }
 log_warn() { echo "[nilocardmed-wifi-ap][AVISO] $*" >&2; }
 log_error() { echo "[nilocardmed-wifi-ap][ERROR] $*" >&2; }
@@ -80,16 +85,34 @@ mac_suffix() {
   echo "0000"
 }
 
+freq_to_channel() {
+  local freq="${1%%.*}"
+  if [[ "${freq}" =~ ^[0-9]+$ ]] && (( freq >= 2412 && freq <= 2484 )); then
+    echo $(( (freq - 2412) / 5 + 1 ))
+    return 0
+  fi
+  return 1
+}
+
 detect_channel() {
-  local channel=""
+  local channel="" freq=""
 
   channel="$(iw dev "${STA_INTERFACE}" info 2>/dev/null | awk '/channel/ {print $2; exit}' || true)"
   if [[ -n "${channel}" && "${channel}" =~ ^[0-9]+$ ]]; then
     echo "${channel}"
     return 0
   fi
-  log_warn "wlan0 sin canal detectado — usando canal 6 (AP+STA deben coincidir en la Pi)"
-  echo "6"
+
+  freq="$(iw dev "${STA_INTERFACE}" link 2>/dev/null | awk '/freq:/ {print $2; exit}' || true)"
+  channel="$(freq_to_channel "${freq}" 2>/dev/null || true)"
+  if [[ -n "${channel}" ]]; then
+    log "Canal desde freq ${freq} MHz → ${channel}"
+    echo "${channel}"
+    return 0
+  fi
+
+  log_warn "wlan0 sin canal — usando 1 (AP+STA deben coincidir en brcmfmac)"
+  echo "1"
 }
 
 wait_for_sta() {
@@ -106,15 +129,15 @@ wait_for_sta() {
 
 wait_for_sta_channel() {
   local attempt channel=""
-  for attempt in $(seq 1 45); do
-    channel="$(iw dev "${STA_INTERFACE}" info 2>/dev/null | awk '/channel/ {print $2; exit}' || true)"
+  for attempt in $(seq 1 30); do
+    channel="$(detect_channel 2>/dev/null || true)"
     if [[ -n "${channel}" && "${channel}" =~ ^[0-9]+$ ]]; then
       log "Canal ${STA_INTERFACE}: ${channel} (AP usará el mismo — requisito Pi concurrente)"
       return 0
     fi
     sleep 2
   done
-  log_warn "wlan0 sin canal tras 90 s — conéctala a WiFi antes; el AP puede fallar (NO-CARRIER)"
+  log_warn "wlan0 sin canal tras 60 s — conéctala a WiFi antes; el AP puede fallar"
   return 1
 }
 
@@ -122,14 +145,21 @@ hostapd_is_running() {
   [[ -f "${RUN_DIR}/hostapd.pid" ]] && kill -0 "$(cat "${RUN_DIR}/hostapd.pid")" 2>/dev/null
 }
 
+reset_ap_link() {
+  ip link set "${AP_INTERFACE}" down 2>/dev/null || true
+  ip addr flush dev "${AP_INTERFACE}" 2>/dev/null || true
+}
+
 ensure_ap_interface() {
-  mkdir -p "${LOG_DIR}"
+  mkdir -p "${LOG_DIR}" "${RUN_DIR}" "${CONFIG_DIR}"
+  touch "${LOG_DIR}/hostapd.log" "${LOG_DIR}/dnsmasq-start.log" 2>/dev/null || true
+
   if ip link show "${AP_INTERFACE}" >/dev/null 2>&1; then
     if hostapd_is_running; then
       return 0
     fi
     log_warn "${AP_INTERFACE} existe pero hostapd no corre — recreando interfaz"
-    ip link set "${AP_INTERFACE}" down 2>/dev/null || true
+    reset_ap_link
     iw dev "${AP_INTERFACE}" del 2>/dev/null || true
   fi
   if ! ip link show "${STA_INTERFACE}" >/dev/null 2>&1; then
@@ -138,6 +168,7 @@ ensure_ap_interface() {
   fi
   log "Creando interfaz virtual ${AP_INTERFACE} (__ap) sobre ${STA_INTERFACE}"
   if iw dev "${STA_INTERFACE}" interface add "${AP_INTERFACE}" type __ap 2>"${LOG_DIR}/iw-add.err"; then
+    reset_ap_link
     return 0
   fi
   log_error "iw no pudo crear ${AP_INTERFACE}: $(tr '\n' ' ' <"${LOG_DIR}/iw-add.err" 2>/dev/null || echo '?')"
@@ -145,14 +176,13 @@ ensure_ap_interface() {
   return 1
 }
 
-configure_ap_address() {
-  ip link set "${AP_INTERFACE}" down 2>/dev/null || true
-  ip addr flush dev "${AP_INTERFACE}" 2>/dev/null || true
+assign_ap_ip() {
+  reset_ap_link
   ip addr add "${AP_IP}/${AP_CIDR}" dev "${AP_INTERFACE}"
-  ip link set "${AP_INTERFACE}" up
-  # NO-CARRIER hasta que hostapd emita beacons es normal en brcmfmac.
+  ip link set "${AP_INTERFACE}" up 2>/dev/null || true
 }
 
+# Config mínima probada en brcmfmac (Pi Zero 2 W). País vía iw reg, no en hostapd.conf.
 write_hostapd_conf() {
   local ssid="$1"
   local channel="$2"
@@ -170,37 +200,33 @@ write_hostapd_conf() {
   fi
 
   mkdir -p "${CONFIG_DIR}" "${LOG_DIR}" "${RUN_DIR}"
-  python3 - "${conf}" "${AP_INTERFACE}" "${ssid}" "${channel}" "${WIFI_COUNTRY}" "${password}" "${ieee11n}" "${RUN_DIR}" <<'PY'
+  python3 - "${conf}" "${AP_INTERFACE}" "${ssid}" "${channel}" "${password}" "${ieee11n}" <<'PY'
 import sys
 from pathlib import Path
 
-path, interface, ssid, channel, country, password, ieee11n, run_dir = sys.argv[1:9]
+path, interface, ssid, channel, password, ieee11n = sys.argv[1:7]
 lines = [
     f"interface={interface}",
     "driver=nl80211",
-    f"ctrl_interface={run_dir}/hostapd-ctrl",
-    "ctrl_interface_group=0",
     f"ssid={ssid}",
     "hw_mode=g",
     f"channel={channel}",
-    f"country_code={country}",
-    "noscan=1",
-    "beacon_int=100",
     "macaddr_acl=0",
     "auth_algs=1",
     "ignore_broadcast_ssid=0",
     "wpa=2",
     "wpa_key_mgmt=WPA-PSK",
     f"wpa_passphrase={password}",
+    "wpa_pairwise=TKIP CCMP",
     "rsn_pairwise=CCMP",
 ]
 if ieee11n == "1":
     lines.extend(["ieee80211n=1", "wmm_enabled=1"])
 else:
-    lines.append("ieee80211n=0")
+    lines.extend(["ieee80211n=0", "wmm_enabled=0"])
 Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
-  log "hostapd.conf escrito (WPA2, canal ${channel}, ieee80211n=${ieee11n}, noscan=1)"
+  log "hostapd.conf escrito (canal ${channel}, ieee80211n=${ieee11n})"
 }
 
 write_dnsmasq_conf() {
@@ -221,22 +247,6 @@ log-facility=${LOG_DIR}/dnsmasq.log
 EOF
 }
 
-validate_hostapd_conf() {
-  local conf="${CONFIG_DIR}/hostapd.conf"
-  hostapd -t "${conf}" >"${LOG_DIR}/hostapd-test.log" 2>&1
-}
-
-start_hostapd_background() {
-  local conf="${CONFIG_DIR}/hostapd.conf"
-  if ! validate_hostapd_conf; then
-    log_warn "hostapd -t falló: $(tail -3 "${LOG_DIR}/hostapd-test.log" | tr '\n' ' ')"
-    return 1
-  fi
-  hostapd -B -P "${RUN_DIR}/hostapd.pid" "${conf}" >>"${LOG_DIR}/hostapd.log" 2>&1
-  verify_ap_active || return 1
-  return 0
-}
-
 verify_ap_active() {
   local attempt ssid=""
   for attempt in $(seq 1 15); do
@@ -250,7 +260,7 @@ verify_ap_active() {
     sleep 1
   done
   if hostapd_is_running; then
-    log_warn "hostapd corre pero uap0 no emite SSID (puede verse NO-CARRIER en ip link)"
+    log_warn "hostapd corre pero uap0 no emite SSID"
   else
     log_warn "hostapd terminó: $(tail -8 "${LOG_DIR}/hostapd.log" 2>/dev/null | tr '\n' ' ')"
   fi
@@ -282,35 +292,48 @@ start_dnsmasq() {
   }
 }
 
-write_hostapd_config_with_fallback() {
+# hostapd -t falla en brcmfmac con uap0; probamos arranque real con reintentos.
+start_hostapd_with_fallback() {
   local ssid="$1"
   local channel="$2"
   local password="$3"
+  local ieee11n conf="${CONFIG_DIR}/hostapd.conf"
 
-  write_hostapd_conf "${ssid}" "${channel}" "${password}" "0"
-  if validate_hostapd_conf; then
-    return 0
-  fi
-  log_warn "hostapd -t falló sin 802.11n: $(tail -3 "${LOG_DIR}/hostapd-test.log" | tr '\n' ' ')"
-  log_warn "Reintentando hostapd con ieee80211n=1..."
-  write_hostapd_conf "${ssid}" "${channel}" "${password}" "1"
-  validate_hostapd_conf
+  reset_ap_link
+
+  for ieee11n in 0 1; do
+    stop_hostapd
+    write_hostapd_conf "${ssid}" "${channel}" "${password}" "${ieee11n}"
+    log "Arrancando hostapd (ieee80211n=${ieee11n}, canal ${channel}, ${AP_INTERFACE})..."
+    if hostapd -B -P "${RUN_DIR}/hostapd.pid" "${conf}" >>"${LOG_DIR}/hostapd.log" 2>&1 \
+      && verify_ap_active; then
+      assign_ap_ip
+      return 0
+    fi
+    log_warn "hostapd ieee80211n=${ieee11n} falló: $(tail -6 "${LOG_DIR}/hostapd.log" 2>/dev/null | tr '\n' ' ')"
+    stop_hostapd
+    reset_ap_link
+  done
+
+  log_error "hostapd no pudo inicializar ${AP_INTERFACE}"
+  log_error "Log: ${LOG_DIR}/hostapd.log"
+  log_error "Prueba manual: sudo iw dev wlan0 interface add uap0 type __ap && sudo hostapd -dd ${conf}"
+  return 1
 }
 
 prepare_ap_core() {
   load_deploy_env
-  mkdir -p "${RUN_DIR}" "${LOG_DIR}"
+  mkdir -p "${RUN_DIR}" "${LOG_DIR}" "${CONFIG_DIR}"
 
   local ap_password ssid channel suffix
   ap_password="$(resolve_ap_password || true)"
   if [[ -z "${ap_password}" ]]; then
     log_error "Sin contraseña WPA en ${INSTALL_DIR}/.env (NILOCARDMED_CONNECTION_PASSWORD)"
-    log_error "Ejecuta en la Pi: cd ~/dev/NiloCardmed-dev && sudo ./scripts/update.sh"
-    log_error "Debe ser ≥8 caracteres (WPA2). Comprueba: grep CONNECTION /opt/nilocardmed/.env"
+    log_error "Ejecuta: sudo ./scripts/update.sh  (≥8 caracteres)"
     return 1
   fi
   if [[ ${#ap_password} -lt 8 || ${#ap_password} -gt 63 ]]; then
-    log_error "Contraseña WPA inválida (${#ap_password} chars; necesita 8-63). Ejecuta: sudo ./scripts/update.sh"
+    log_error "Contraseña WPA inválida (${#ap_password} chars; necesita 8-63)"
     return 1
   fi
 
@@ -322,21 +345,19 @@ prepare_ap_core() {
   ssid="${AP_SSID_PREFIX}-${suffix}"
   channel="$(detect_channel)"
 
-  ensure_ap_interface || return 1
-  configure_ap_address
-  write_dnsmasq_conf
-  write_hostapd_config_with_fallback "${ssid}" "${channel}" "${ap_password}" || {
-    log_error "hostapd.conf inválido — log: ${LOG_DIR}/hostapd-test.log"
-    return 1
-  }
+  AP_SSID="${ssid}"
+  AP_CHANNEL="${channel}"
+  AP_PASSWORD="${ap_password}"
 
-  log "AP configurado: SSID=${ssid} IP=${AP_IP} (${AP_INTERFACE}) canal=${channel} WPA2"
+  ensure_ap_interface || return 1
+  write_dnsmasq_conf
+
+  log "AP listo para arrancar: SSID=${ssid} canal=${channel} (${AP_INTERFACE})"
   return 0
 }
 
 start_ap_services() {
-  stop_hostapd
-  start_hostapd_background || return 1
+  start_hostapd_with_fallback "${AP_SSID}" "${AP_CHANNEL}" "${AP_PASSWORD}" || return 1
   start_dnsmasq || {
     stop_hostapd
     return 1
@@ -363,22 +384,10 @@ monitor_hostapd_foreground() {
 }
 
 run_ap_foreground() {
-  local conf="${CONFIG_DIR}/hostapd.conf"
   local hp_pid=""
 
   prepare_ap_core || exit 1
-
-  if ! hostapd -B -P "${RUN_DIR}/hostapd.pid" "${conf}" >>"${LOG_DIR}/hostapd.log" 2>&1; then
-    log_error "hostapd no arrancó — log: ${LOG_DIR}/hostapd.log"
-    tail -10 "${LOG_DIR}/hostapd.log" >&2 || true
-    exit 1
-  fi
-  verify_ap_active || exit 1
-
-  start_dnsmasq || {
-    stop_hostapd
-    exit 1
-  }
+  start_ap_services || exit 1
 
   hp_pid="$(cat "${RUN_DIR}/hostapd.pid")"
   log "Supervisando hostapd pid ${hp_pid} (systemd reinicia si cae)"
@@ -399,7 +408,7 @@ stop_ap() {
   stop_hostapd
 
   if ip link show "${AP_INTERFACE}" >/dev/null 2>&1; then
-    ip link set "${AP_INTERFACE}" down 2>/dev/null || true
+    reset_ap_link
     iw dev "${AP_INTERFACE}" del 2>/dev/null || true
   fi
   log "AP detenido"
@@ -413,7 +422,7 @@ status_ap() {
   if hostapd_is_running; then
     echo "hostapd: activo pid $(cat "${RUN_DIR}/hostapd.pid")"
   else
-    echo "hostapd: NO ACTIVO — uap0 NO-CARRIER es normal hasta que hostapd arranque; si persiste, revisa logs"
+    echo "hostapd: NO ACTIVO"
   fi
   if [[ -f "${RUN_DIR}/dnsmasq.pid" ]] && kill -0 "$(cat "${RUN_DIR}/dnsmasq.pid")" 2>/dev/null; then
     echo "dnsmasq: activo pid $(cat "${RUN_DIR}/dnsmasq.pid")"
@@ -430,14 +439,13 @@ diagnose_ap() {
   log "Contraseña WPA: $(resolve_ap_password >/dev/null && echo 'OK (configurada)' || echo 'FALTA')"
   ip -br link show "${STA_INTERFACE}" 2>/dev/null || log_warn "Sin ${STA_INTERFACE}"
   iw dev "${STA_INTERFACE}" link 2>/dev/null | head -5 || log_warn "wlan0 sin enlace"
+  log "Canal detectado: $(detect_channel 2>/dev/null || echo '?')"
   ip -br link show "${AP_INTERFACE}" 2>/dev/null || log_warn "Sin ${AP_INTERFACE}"
   iw dev 2>/dev/null || true
   iw list 2>/dev/null | grep -A6 "valid interface combinations" || true
   systemctl status nilocardmed-wifi-ap --no-pager 2>/dev/null || true
   status_ap
-  [[ -f "${LOG_DIR}/hostapd.log" ]] && tail -15 "${LOG_DIR}/hostapd.log" || true
-  [[ -f "${LOG_DIR}/hostapd-test.log" ]] && tail -5 "${LOG_DIR}/hostapd-test.log" || true
-  [[ -f "${LOG_DIR}/dnsmasq.log" ]] && tail -5 "${LOG_DIR}/dnsmasq.log" || true
+  [[ -f "${LOG_DIR}/hostapd.log" ]] && tail -20 "${LOG_DIR}/hostapd.log" || log_warn "Sin ${LOG_DIR}/hostapd.log"
   [[ -f "${LOG_DIR}/iw-add.err" ]] && cat "${LOG_DIR}/iw-add.err" || true
 }
 
@@ -445,7 +453,7 @@ cmd="${1:-start}"
 case "${cmd}" in
   start) start_ap ;;
   run) run_ap_foreground ;;
-  prepare) prepare_ap ;;
+  prepare) prepare_ap_core ;;
   stop) stop_ap ;;
   restart) stop_ap; start_ap ;;
   status) status_ap ;;

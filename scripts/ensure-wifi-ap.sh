@@ -25,6 +25,13 @@ fi
 
 ensure_wifi_ap_packages
 
+# Evita que wlan0 cambie de canal en caliente (rompe uap0 concurrente en brcmfmac).
+brcmfmac_conf="/etc/modprobe.d/nilocardmed-brcmfmac.conf"
+if [[ ! -f "${brcmfmac_conf}" ]]; then
+  echo "options brcmfmac roamoff=1" >"${brcmfmac_conf}"
+  log_info "brcmfmac roamoff=1 — reinicia la Pi una vez para aplicar (estabilidad AP+STA)"
+fi
+
 require_command iw
 require_command hostapd
 require_command dnsmasq
