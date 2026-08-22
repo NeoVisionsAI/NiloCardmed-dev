@@ -38,8 +38,9 @@ Comandos:
   stop      docker compose down (usa deploy.env, proyecto nilocardmed)
   logs      docker compose logs -f --tail=100
   trace     Solo traza operativa (BLE, WiFi, config) en tiempo real
+  deploy    Alias de update.sh: código + Bluetooth host + rebuild opcional + restart
 
-Opciones (start / install):
+Opciones (start / install / deploy):
   --build   Reconstruir imagen Docker antes de arrancar
 
 Ejemplos:
@@ -47,6 +48,8 @@ Ejemplos:
   ./scripts/pi-start.sh start
   ./scripts/pi-start.sh start --build
   ./scripts/pi-start.sh install
+  sudo ./scripts/pi-start.sh deploy          # actualización rápida (sin rebuild)
+  sudo ./scripts/pi-start.sh deploy --build  # rebuild + Bluetooth + restart systemd
 EOF
 }
 
@@ -78,6 +81,10 @@ parse_args() {
       ;;
     trace)
       cmd_trace
+      exit 0
+      ;;
+    deploy | update)
+      cmd_deploy "$@"
       exit 0
       ;;
     -h | --help | help)
@@ -345,6 +352,26 @@ cmd_trace() {
   export COMPOSE_PROJECT_NAME COMPOSE_FILE
   log_info "Traza operativa (Ctrl+C para salir). Filtro: nilocardmed.trace y mensajes TRACE"
   compose_cmd logs -f --tail=50 2>&1 | grep --line-buffered -E 'nilocardmed\.trace| TRACE |Cliente BLE|WiFi conectado|autenticación BLE|bluetooth_activo|\[ble\]|\[wifi\]|\[config\]|\[system\]'
+}
+
+cmd_deploy() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    log_error "deploy requiere root: sudo ./scripts/pi-start.sh deploy [--build]"
+    exit 1
+  fi
+
+  local update_script="${REPO_ROOT}/scripts/update.sh"
+  if [[ ! -f "${update_script}" ]]; then
+    update_script="${INSTALL_DIR}/scripts/update.sh"
+  fi
+  if [[ ! -f "${update_script}" ]]; then
+    log_error "No se encontró scripts/update.sh"
+    exit 1
+  fi
+
+  log_info "Despliegue: ${update_script} $*"
+  log_info "(incluye ensure-bluetooth-powered + systemctl restart nilocardmed)"
+  exec bash "${update_script}" "$@"
 }
 
 main() {

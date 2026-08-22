@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Actualización rápida en Pi: sincroniza código y reinicia, sin apt ni rebuild Docker.
+# Actualización en Pi — UN solo comando (código + Bluetooth host + restart systemd).
 #
 # Uso:
 #   sudo ./scripts/update.sh              # solo código + restart (~segundos)
 #   sudo ./scripts/update.sh --build      # rebuild si cambió Dockerfile/requirements
 #
-# Tras cambiar dependencias pip o Dockerfile:
-#   sudo ./scripts/update.sh --build
-# La primera build sigue tardando ~15 min; las siguientes reutilizan caché de capas.
+# Equivalente:
+#   sudo ./scripts/pi-start.sh deploy [--build]
+#
+# NO hace falta ejecutar a mano ensure-bluetooth-powered ni systemctl restart.
 
 set -euo pipefail
 

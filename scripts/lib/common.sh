@@ -286,6 +286,11 @@ ensure_bluetooth_host_ready() {
     return 0
   fi
 
+  if [[ -f "${install_dir}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${install_dir}/deploy.env" && set +a
+  fi
+
   if ! is_true "${ENABLE_BLUETOOTH:-false}"; then
     log_info "ENABLE_BLUETOOTH=false — omitiendo ensure-bluetooth-powered"
     return 0
@@ -300,4 +305,7 @@ ensure_bluetooth_host_ready() {
   log_info "=== Bluetooth host (BlueZ Experimental, discoverable, alias) ==="
   INSTALL_DIR="${install_dir}" ENV_FILE="${install_dir}/.env" \
     bash "${script}" || log_warn "ensure-bluetooth-powered falló — revisa: bluetoothctl show"
+
+  # Tras tocar BlueZ (p. ej. restart bluetooth), dar tiempo al adaptador.
+  sleep 3
 }

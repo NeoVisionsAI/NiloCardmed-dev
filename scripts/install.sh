@@ -155,6 +155,7 @@ run_compose_in_install_dir down --remove-orphans 2>/dev/null || true
 
 ensure_bluetooth_host_ready "${INSTALL_DIR}"
 
+log_info "=== Reinicio del servicio ${NILOCARDMED_SERVICE_NAME} ==="
 systemctl restart "${NILOCARDMED_SERVICE_NAME}.service"
 
 if ! verify_service_and_container; then

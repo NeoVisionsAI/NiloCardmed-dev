@@ -95,7 +95,6 @@ class BluezBluetoothBackend(BluetoothBackend):
         self._command_worker: threading.Thread | None = None
         self._command_worker_stop = threading.Event()
         self._mainloop_tx_queue: queue.Queue[list[bytes]] = queue.Queue()
-        self._mainloop_tx_idle_active = False
         self._mainloop_action_queue: queue.Queue[Callable[[], None]] = queue.Queue()
 
     def start(self, shutdown: threading.Event) -> None:
@@ -205,32 +204,14 @@ class BluezBluetoothBackend(BluetoothBackend):
 
     def _schedule_tx_delivery(self, frames: list[bytes]) -> None:
         self._mainloop_tx_queue.put(frames)
-        if self._mainloop_tx_idle_active:
-            return
-        self._mainloop_tx_idle_active = True
+
+    def _poll_tx_responses(self) -> bool:
         try:
-            import gi
-
-            gi.require_version("GLib", "2.0")
-            from gi.repository import GLib
-
-            GLib.idle_add(self._drain_mainloop_tx_queue)
-        except Exception as exc:
-            logger.warning("Entrega BLE vía idle_add falló (%s); entrega directa", exc)
-            self._mainloop_tx_idle_active = False
-            self._deliver_response_frames(frames)
-
-    def _drain_mainloop_tx_queue(self) -> bool:
-        try:
-            frames = self._mainloop_tx_queue.get_nowait()
+            while True:
+                frames = self._mainloop_tx_queue.get_nowait()
+                self._deliver_response_frames(frames)
         except queue.Empty:
-            self._mainloop_tx_idle_active = False
-            return False
-
-        self._deliver_response_frames(frames)
-        if self._mainloop_tx_queue.empty():
-            self._mainloop_tx_idle_active = False
-            return False
+            pass
         return True
 
     def _deliver_response_frames(self, frames: list[bytes]) -> bool:
@@ -458,6 +439,7 @@ class BluezBluetoothBackend(BluetoothBackend):
             return True
 
         GLib.timeout_add_seconds(15, _periodic_ble_maintenance)
+        GLib.timeout_add(50, self._poll_tx_responses)
 
         try:
             ble.mainloop.run()
