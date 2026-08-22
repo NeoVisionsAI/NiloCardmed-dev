@@ -75,6 +75,11 @@ class WifiService:
         persist_cfg = self.settings.persist_to_config if persist is None else persist
         logger.info("Conectando a WiFi ssid=%s backend=%s", ssid, self.backend.name)
 
+        snapshot = None
+        capture = getattr(self.backend, "capture_connection_snapshot", None)
+        if callable(capture):
+            snapshot = capture()
+
         status = self.backend.connect(ssid, password)
         if self.settings.verify_connectivity:
             connectivity_ok = self.backend.verify_connectivity()
@@ -89,8 +94,15 @@ class WifiService:
                 connectivity_ok=connectivity_ok,
             )
             if not connectivity_ok:
+                restored = False
+                restore = getattr(self.backend, "restore_connection", None)
+                if callable(restore) and snapshot and snapshot.get("ssid") != ssid:
+                    restored = bool(restore(snapshot))
                 raise WifiConnectionError(
-                    "Conectado a la red pero sin conectividad externa verificable"
+                    "Conectado a la red pero sin conectividad externa verificable",
+                    restored_previous=restored,
+                    previous_ssid=snapshot.get("ssid") if snapshot else None,
+                    attempted_ssid=ssid,
                 )
 
         if persist_cfg and self._config_manager is not None:

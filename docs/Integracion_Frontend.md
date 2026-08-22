@@ -405,15 +405,38 @@ Obtener lista dinámica en runtime:
     "networks": [
       {
         "ssid": "MiRed",
-        "signal": -52,
+        "signal": 70,
         "security": "WPA2",
         "bssid": "AA:BB:…",
-        "frequency_mhz": 2437
+        "frequency_mhz": 2437,
+        "in_use": true
+      },
+      {
+        "ssid": "OtraRed",
+        "signal": 55,
+        "security": "WPA2",
+        "bssid": "CC:DD:…",
+        "frequency_mhz": 5180
       }
-    ]
+    ],
+    "scan_mode": "rescan_with_restore",
+    "connected_preserved": true,
+    "connection_restored": false,
+    "previous_ssid": "MiRed"
   }
 }
 ```
+
+| Campo | Descripción |
+|-------|-------------|
+| `networks` | Lista completa tras rescan (no solo la red conectada) |
+| `scan_mode` | `rescan_with_restore` si había WiFi activo; `rescan` si no |
+| `connected_preserved` | `true` si al terminar sigues conectado a la red original |
+| `connection_restored` | `true` si el rescan cortó el enlace y se restauró automáticamente |
+| `previous_ssid` | SSID al que estabas conectado antes del escaneo (si aplica) |
+| `in_use` | Solo en la red actualmente en uso |
+
+**Nota:** el escaneo fuerza `rescan` aunque haya WiFi conectado. Si el rescan interrumpe el enlace, el dispositivo intenta reconectar a la red anterior antes de responder.
 
 #### `wifi_connect`
 
@@ -457,6 +480,30 @@ Obtener lista dinámica en runtime:
 ```
 
 **Errores:** `wifi_connection_failed`, `wifi_error`
+
+**Respuesta error (`wifi_connection_failed`):**
+
+```json
+{
+  "ok": false,
+  "cmd": "wifi_connect",
+  "id": "21",
+  "error": "wifi_connection_failed: Secrets were required",
+  "data": {
+    "restored_previous": true,
+    "previous_ssid": "MiRed",
+    "attempted_ssid": "OtraRed"
+  }
+}
+```
+
+| Campo en `data` | Descripción |
+|-----------------|-------------|
+| `restored_previous` | `true` si el dispositivo volvió a conectarse a la red anterior |
+| `previous_ssid` | Red a la que estabas conectado antes de probar |
+| `attempted_ssid` | Red que intentaste configurar |
+
+Si `restored_previous` es `true`, la conectividad debería volver al estado previo aunque la contraseña nueva fuera incorrecta.
 
 **Flujo UI recomendado:**
 

@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 if shutil.which("nmcli") is None:
     print("nmcli no disponible", file=sys.stderr)
@@ -24,9 +25,10 @@ INTERFACE = os.environ.get("WIFI_INTERFACE", "wlan0")
 PASSWORD = os.environ.get("WIFI_PASSWORD", "")
 COMMAND = sys.argv[1] if len(sys.argv) > 1 else ""
 ARG = sys.argv[2] if len(sys.argv) > 2 else ""
+SCAN_WAIT_SECONDS = float(os.environ.get("WIFI_SCAN_WAIT_SECONDS", "2.5"))
 
 
-def run_nmcli(*args: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+def run_nmcli(*args: str, timeout: int = 30, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["nmcli", *args],
         capture_output=True,
@@ -34,54 +36,14 @@ def run_nmcli(*args: str, timeout: int = 30) -> subprocess.CompletedProcess[str]
         timeout=timeout,
         check=False,
     )
-    if result.returncode != 0:
+    if check and result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip() or "nmcli error"
         print(message, file=sys.stderr)
         sys.exit(result.returncode)
     return result
 
 
-def scan() -> dict:
-    force_rescan = os.environ.get("WIFI_SCAN_RESCAN", "").lower() in ("1", "true", "yes")
-    rescan_when_connected = os.environ.get("WIFI_SCAN_RESCAN_WHEN_CONNECTED", "").lower() in (
-        "1",
-        "true",
-        "yes",
-    )
-
-    connected = False
-    state_output = subprocess.run(
-        ["nmcli", "-t", "-f", "GENERAL.STATE", "dev", "show", INTERFACE],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
-    if state_output.returncode == 0:
-        connected = "(connected)" in state_output.stdout.lower()
-
-    scan_mode = "list"
-    if connected and not (force_rescan and rescan_when_connected):
-        # Pi con radio única: rescan activo puede cortar SSH/internet.
-        scan_mode = "cached_connected"
-    elif force_rescan or not connected:
-        subprocess.run(
-            ["nmcli", "dev", "wifi", "rescan", "ifname", INTERFACE],
-            check=False,
-            capture_output=True,
-        )
-        scan_mode = "rescan" if not connected else "rescan_connected"
-
-    output = run_nmcli(
-        "-t",
-        "-f",
-        "SSID,SIGNAL,SECURITY,BSSID,FREQ",
-        "dev",
-        "wifi",
-        "list",
-        "ifname",
-        INTERFACE,
-    ).stdout
+def _parse_wifi_list(output: str) -> list[dict]:
     networks: dict[str, dict] = {}
     for line in output.splitlines():
         if not line.strip():
@@ -94,18 +56,102 @@ def scan() -> dict:
         security = parts[2].strip() if len(parts) > 2 and parts[2] else "UNKNOWN"
         bssid = parts[3].strip() if len(parts) > 3 and parts[3] else None
         freq = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else None
+        in_use = parts[5].strip().lower() in {"yes", "sí", "si", "1", "true"} if len(parts) > 5 else False
         networks[ssid] = {
             "ssid": ssid,
             "signal": signal,
             "security": security,
             "bssid": bssid,
             "frequency_mhz": freq,
+            "in_use": in_use,
         }
-    ordered = sorted(networks.values(), key=lambda item: item.get("signal") or 0, reverse=True)
+    return sorted(networks.values(), key=lambda item: item.get("signal") or 0, reverse=True)
+
+
+def connection_snapshot() -> dict | None:
+    st = status()
+    if not st.get("connected"):
+        return None
+    return {
+        "connection": st.get("connection"),
+        "ssid": st.get("ssid"),
+    }
+
+
+def restore_connection(snapshot: dict | None) -> bool:
+    if not snapshot:
+        return False
+
+    connection = snapshot.get("connection")
+    if connection and connection not in {"", "--"}:
+        result = subprocess.run(
+            ["nmcli", "connection", "up", connection, "ifname", INTERFACE],
+            capture_output=True,
+            text=True,
+            timeout=int(os.environ.get("WIFI_CONNECT_TIMEOUT", "30")),
+            check=False,
+        )
+        if result.returncode == 0:
+            return True
+
+    ssid = snapshot.get("ssid")
+    if ssid:
+        result = subprocess.run(
+            ["nmcli", "dev", "wifi", "connect", ssid, "ifname", INTERFACE],
+            capture_output=True,
+            text=True,
+            timeout=int(os.environ.get("WIFI_CONNECT_TIMEOUT", "30")),
+            check=False,
+        )
+        return result.returncode == 0
+
+    return False
+
+
+def scan() -> dict:
+    snapshot = connection_snapshot()
+    cached_only = os.environ.get("WIFI_SCAN_CACHED_ONLY", "").lower() in ("1", "true", "yes")
+
+    if cached_only:
+        scan_mode = "cached"
+    elif snapshot:
+        scan_mode = "rescan_with_restore"
+    else:
+        scan_mode = "rescan"
+
+    if not cached_only:
+        subprocess.run(
+            ["nmcli", "dev", "wifi", "rescan", "ifname", INTERFACE],
+            check=False,
+            capture_output=True,
+        )
+        time.sleep(SCAN_WAIT_SECONDS)
+
+    output = run_nmcli(
+        "-t",
+        "-f",
+        "SSID,SIGNAL,SECURITY,BSSID,FREQ,IN-USE",
+        "dev",
+        "wifi",
+        "list",
+        "ifname",
+        INTERFACE,
+    ).stdout
+    ordered = _parse_wifi_list(output)
+
+    restored = False
+    if snapshot:
+        after = connection_snapshot()
+        if not after or after.get("ssid") != snapshot.get("ssid"):
+            restored = restore_connection(snapshot)
+
+    still = connection_snapshot()
     return {
         "networks": ordered,
         "scan_mode": scan_mode,
-        "connected_preserved": connected and scan_mode == "cached_connected",
+        "connection_restored": restored,
+        "connected_preserved": still is not None,
+        "previous_ssid": snapshot.get("ssid") if snapshot else None,
     }
 
 
@@ -119,7 +165,7 @@ def status() -> dict:
         INTERFACE,
     ).stdout
     state = ""
-    ssid = None
+    connection = None
     ip_address = None
     gateway = None
     for line in output.splitlines():
@@ -127,15 +173,38 @@ def status() -> dict:
             state = line.split(":", 1)[1].strip()
         elif line.startswith("GENERAL.CONNECTION:"):
             value = line.split(":", 1)[1].strip()
-            ssid = value if value != "--" else None
+            connection = value if value != "--" else None
         elif line.startswith("IP4.ADDRESS"):
             ip_address = line.split(":", 1)[1].strip().split("/")[0]
         elif line.startswith("IP4.GATEWAY:"):
             gateway = line.split(":", 1)[1].strip()
+
     connected = "(connected)" in state.lower()
+    ssid = None
+    if connected:
+        list_output = run_nmcli(
+            "-t",
+            "-f",
+            "SSID,IN-USE",
+            "dev",
+            "wifi",
+            "list",
+            "ifname",
+            INTERFACE,
+            check=False,
+        ).stdout
+        for line in list_output.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 2 and parts[1].strip().lower() in {"yes", "sí", "si", "1", "true"}:
+                ssid = parts[0].strip()
+                break
+        if ssid is None and connection:
+            ssid = connection
+
     return {
         "interface": INTERFACE,
         "connected": connected,
+        "connection": connection,
         "ssid": ssid,
         "ip_address": ip_address,
         "gateway": gateway,
@@ -144,15 +213,57 @@ def status() -> dict:
 
 
 def connect(ssid: str) -> dict:
+    snapshot = connection_snapshot()
     args = ["dev", "wifi", "connect", ssid, "ifname", INTERFACE]
     if PASSWORD:
         args.extend(["password", PASSWORD])
-    run_nmcli(*args, timeout=int(os.environ.get("WIFI_CONNECT_TIMEOUT", "30")))
-    result = status()
-    if not result.get("connected"):
-        print(f"No se pudo conectar a {ssid}", file=sys.stderr)
+
+    result = subprocess.run(
+        ["nmcli", *args],
+        capture_output=True,
+        text=True,
+        timeout=int(os.environ.get("WIFI_CONNECT_TIMEOUT", "30")),
+        check=False,
+    )
+
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or f"No se pudo conectar a {ssid}"
+        restored = False
+        if snapshot and snapshot.get("ssid") != ssid:
+            restored = restore_connection(snapshot)
+        payload = status()
+        payload.update(
+            {
+                "success": False,
+                "error": message,
+                "restored_previous": restored,
+                "previous_ssid": snapshot.get("ssid") if snapshot else None,
+                "attempted_ssid": ssid,
+            }
+        )
+        print(json.dumps(payload, ensure_ascii=False))
         sys.exit(1)
-    return result
+
+    final = status()
+    if not final.get("connected") or final.get("ssid") != ssid:
+        restored = False
+        if snapshot and snapshot.get("ssid") != ssid:
+            restored = restore_connection(snapshot)
+        payload = status()
+        payload.update(
+            {
+                "success": False,
+                "error": f"No se pudo conectar a {ssid}",
+                "restored_previous": restored,
+                "previous_ssid": snapshot.get("ssid") if snapshot else None,
+                "attempted_ssid": ssid,
+            }
+        )
+        print(json.dumps(payload, ensure_ascii=False))
+        sys.exit(1)
+
+    final["success"] = True
+    return final
 
 
 def disconnect() -> dict:
@@ -171,6 +282,18 @@ elif COMMAND == "connect":
     print(json.dumps(connect(ARG), ensure_ascii=False))
 elif COMMAND == "disconnect":
     print(json.dumps(disconnect(), ensure_ascii=False))
+elif COMMAND == "snapshot":
+    snap = connection_snapshot()
+    print(json.dumps(snap or {}, ensure_ascii=False))
+elif COMMAND == "restore":
+    raw = os.environ.get("WIFI_SNAPSHOT", "")
+    snap = json.loads(raw) if raw else None
+    if snap == {}:
+        snap = None
+    restored = restore_connection(snap)
+    payload = status()
+    payload["restored"] = restored
+    print(json.dumps(payload, ensure_ascii=False))
 else:
     print(f"Comando no reconocido: {COMMAND}", file=sys.stderr)
     sys.exit(1)

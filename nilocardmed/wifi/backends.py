@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -101,7 +102,19 @@ class HostScriptBackend(WifiBackend):
         if result.returncode != 0:
             message = result.stderr.strip() or result.stdout.strip() or "Error desconocido"
             if args and args[0] == "connect":
-                raise WifiConnectionError(message)
+                payload: dict = {}
+                stdout = result.stdout.strip()
+                if stdout:
+                    try:
+                        payload = json.loads(stdout)
+                    except json.JSONDecodeError:
+                        payload = {}
+                raise WifiConnectionError(
+                    str(payload.get("error", message)),
+                    restored_previous=bool(payload.get("restored_previous")),
+                    previous_ssid=payload.get("previous_ssid"),
+                    attempted_ssid=payload.get("attempted_ssid"),
+                )
             raise WifiBackendError(message)
 
         output = result.stdout.strip()
@@ -113,18 +126,33 @@ class HostScriptBackend(WifiBackend):
             raise WifiBackendError(f"Salida JSON inválida del script WiFi: {output[:200]}") from exc
 
     def scan(self, *, rescan: bool = False) -> WifiScanResult:
-        extra_env: dict[str, str] = {}
-        if rescan:
-            extra_env["WIFI_SCAN_RESCAN"] = "1"
-        if self.settings.scan_rescan_when_connected:
-            extra_env["WIFI_SCAN_RESCAN_WHEN_CONNECTED"] = "1"
-        payload = self._run("scan", extra_env=extra_env)
+        payload = self._run("scan")
         networks = [_network_from_dict(item) for item in payload.get("networks", [])]
         return WifiScanResult(
             networks=networks,
             scan_mode=str(payload.get("scan_mode", "list")),
             connected_preserved=bool(payload.get("connected_preserved", False)),
+            connection_restored=bool(payload.get("connection_restored", False)),
+            previous_ssid=payload.get("previous_ssid"),
         )
+
+    def capture_connection_snapshot(self) -> dict | None:
+        payload = self._run("snapshot")
+        if not payload or not payload.get("ssid"):
+            return None
+        return {
+            "connection": payload.get("connection"),
+            "ssid": payload.get("ssid"),
+        }
+
+    def restore_connection(self, snapshot: dict | None) -> bool:
+        if not snapshot:
+            return False
+        payload = self._run(
+            "restore",
+            extra_env={"WIFI_SNAPSHOT": json.dumps(snapshot, ensure_ascii=False)},
+        )
+        return bool(payload.get("restored"))
 
     def status(self) -> WifiStatus:
         payload = self._run("status")
@@ -170,88 +198,117 @@ class NmcliBackend(WifiBackend):
             raise WifiBackendError(message)
         return result.stdout
 
-    def _interface_connected(self) -> bool:
-        try:
-            output = self._run_nmcli(
-                "-t",
-                "-f",
-                "GENERAL.STATE",
-                "dev",
-                "show",
-                self.settings.interface,
-                timeout=5,
-            )
-        except WifiBackendError:
+    def _connection_snapshot(self) -> dict | None:
+        status = self.status()
+        if not status.connected:
+            return None
+        output = self._run_nmcli(
+            "-t",
+            "-f",
+            "GENERAL.CONNECTION",
+            "dev",
+            "show",
+            self.settings.interface,
+            timeout=5,
+        )
+        connection = None
+        for line in output.splitlines():
+            if line.startswith("GENERAL.CONNECTION:"):
+                value = line.split(":", 1)[1].strip()
+                connection = value if value != "--" else None
+        return {
+            "connection": connection,
+            "ssid": status.ssid,
+        }
+
+    def _restore_connection(self, snapshot: dict | None) -> bool:
+        if not snapshot:
             return False
-        return "(connected)" in output.lower()
+
+        connection = snapshot.get("connection")
+        if connection and connection not in {"", "--"}:
+            result = subprocess.run(
+                [
+                    self.settings.nmcli_binary,
+                    "connection",
+                    "up",
+                    connection,
+                    "ifname",
+                    self.settings.interface,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=self.settings.connect_timeout_seconds,
+                check=False,
+            )
+            if result.returncode == 0:
+                return True
+
+        ssid = snapshot.get("ssid")
+        if ssid:
+            result = subprocess.run(
+                [
+                    self.settings.nmcli_binary,
+                    "dev",
+                    "wifi",
+                    "connect",
+                    ssid,
+                    "ifname",
+                    self.settings.interface,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=self.settings.connect_timeout_seconds,
+                check=False,
+            )
+            return result.returncode == 0
+        return False
+
+    def capture_connection_snapshot(self) -> dict | None:
+        return self._connection_snapshot()
+
+    def restore_connection(self, snapshot: dict | None) -> bool:
+        return self._restore_connection(snapshot)
 
     def scan(self, *, rescan: bool = False) -> WifiScanResult:
-        connected = self._interface_connected()
-        scan_mode = "cached"
-        allow_rescan = rescan or self.settings.scan_rescan_when_connected
-        if allow_rescan and (not connected or self.settings.scan_rescan_when_connected):
-            self._run_nmcli(
-                "dev",
-                "wifi",
-                "rescan",
-                "ifname",
-                self.settings.interface,
-                timeout=10,
-            )
-            scan_mode = "rescan"
-        elif connected:
-            scan_mode = "cached_connected"
-            logger.info(
-                "wifi_scan: omitiendo rescan en %s (WiFi conectado; preserva enlace)",
-                self.settings.interface,
-            )
-        else:
-            self._run_nmcli(
-                "dev",
-                "wifi",
-                "rescan",
-                "ifname",
-                self.settings.interface,
-                timeout=10,
-            )
-            scan_mode = "rescan"
+        snapshot = self._connection_snapshot()
+        scan_mode = "rescan_with_restore" if snapshot else "rescan"
+
+        self._run_nmcli(
+            "dev",
+            "wifi",
+            "rescan",
+            "ifname",
+            self.settings.interface,
+            timeout=10,
+        )
+        time.sleep(min(2.5, self.settings.scan_timeout_seconds / 2))
 
         output = self._run_nmcli(
             "-t",
             "-f",
-            "SSID,SIGNAL,SECURITY,BSSID,FREQ",
+            "SSID,SIGNAL,SECURITY,BSSID,FREQ,IN-USE",
             "dev",
             "wifi",
             "list",
             "ifname",
             self.settings.interface,
         )
-        networks: dict[str, WifiNetwork] = {}
-        for line in output.splitlines():
-            if not line.strip():
-                continue
-            parts = line.split(":")
-            if len(parts) < 2:
-                continue
-            ssid = parts[0].strip()
-            if not ssid:
-                continue
-            signal = _safe_int(parts[1]) if len(parts) > 1 else None
-            security = parts[2].strip() if len(parts) > 2 and parts[2] else _SECURITY_UNKNOWN
-            bssid = parts[3].strip() if len(parts) > 3 and parts[3] else None
-            freq = _safe_int(parts[4]) if len(parts) > 4 else None
-            networks[ssid] = WifiNetwork(
-                ssid=ssid,
-                signal=signal,
-                security=security,
-                bssid=bssid,
-                frequency_mhz=freq,
-            )
-        ordered = sorted(networks.values(), key=lambda item: item.signal or 0, reverse=True)
+        networks = _parse_nmcli_wifi_list(output)
+
+        restored = False
+        if snapshot:
+            after = self._connection_snapshot()
+            if not after or after.get("ssid") != snapshot.get("ssid"):
+                restored = self._restore_connection(snapshot)
+
+        still = self._connection_snapshot()
         return WifiScanResult(
-            networks=ordered,
+            networks=networks,
             scan_mode=scan_mode,
-            connected_preserved=connected and scan_mode == "cached_connected",
+            connected_preserved=still is not None,
+            connection_restored=restored,
+            previous_ssid=snapshot.get("ssid") if snapshot else None,
         )
 
     def status(self) -> WifiStatus:
@@ -289,13 +346,49 @@ class NmcliBackend(WifiBackend):
         )
 
     def connect(self, ssid: str, password: str | None = None) -> WifiStatus:
-        args = ["dev", "wifi", "connect", ssid, "ifname", self.settings.interface]
+        snapshot = self._connection_snapshot()
+        args = [
+            self.settings.nmcli_binary,
+            "dev",
+            "wifi",
+            "connect",
+            ssid,
+            "ifname",
+            self.settings.interface,
+        ]
         if password:
             args.extend(["password", password])
-        self._run_nmcli(*args, timeout=self.settings.connect_timeout_seconds)
+
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=self.settings.connect_timeout_seconds,
+            check=False,
+        )
+        if result.returncode != 0:
+            message = result.stderr.strip() or result.stdout.strip() or f"No se pudo conectar a {ssid}"
+            restored = False
+            if snapshot and snapshot.get("ssid") != ssid:
+                restored = self._restore_connection(snapshot)
+            raise WifiConnectionError(
+                message,
+                restored_previous=restored,
+                previous_ssid=snapshot.get("ssid") if snapshot else None,
+                attempted_ssid=ssid,
+            )
+
         status = self.status()
         if not status.connected or status.ssid != ssid:
-            raise WifiConnectionError(f"No se pudo conectar a {ssid}")
+            restored = False
+            if snapshot and snapshot.get("ssid") != ssid:
+                restored = self._restore_connection(snapshot)
+            raise WifiConnectionError(
+                f"No se pudo conectar a {ssid}",
+                restored_previous=restored,
+                previous_ssid=snapshot.get("ssid") if snapshot else None,
+                attempted_ssid=ssid,
+            )
         return status
 
     def disconnect(self) -> WifiStatus:
@@ -380,6 +473,31 @@ def _safe_int(value: str | None) -> int | None:
         return None
 
 
+def _parse_nmcli_wifi_list(output: str) -> list[WifiNetwork]:
+    networks: dict[str, WifiNetwork] = {}
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(":")
+        if not parts or not parts[0].strip():
+            continue
+        ssid = parts[0].strip()
+        signal = _safe_int(parts[1]) if len(parts) > 1 else None
+        security = parts[2].strip() if len(parts) > 2 and parts[2] else _SECURITY_UNKNOWN
+        bssid = parts[3].strip() if len(parts) > 3 and parts[3] else None
+        freq = _safe_int(parts[4]) if len(parts) > 4 else None
+        in_use = parts[5].strip().lower() in {"yes", "sí", "si", "1", "true"} if len(parts) > 5 else False
+        networks[ssid] = WifiNetwork(
+            ssid=ssid,
+            signal=signal,
+            security=security,
+            bssid=bssid,
+            frequency_mhz=freq,
+            in_use=in_use,
+        )
+    return sorted(networks.values(), key=lambda item: item.signal or 0, reverse=True)
+
+
 def _network_from_dict(data: dict) -> WifiNetwork:
     return WifiNetwork(
         ssid=str(data.get("ssid", "")),
@@ -387,6 +505,7 @@ def _network_from_dict(data: dict) -> WifiNetwork:
         security=data.get("security"),
         bssid=data.get("bssid"),
         frequency_mhz=_safe_int(str(data["frequency_mhz"])) if data.get("frequency_mhz") else None,
+        in_use=bool(data.get("in_use")),
     )
 
 

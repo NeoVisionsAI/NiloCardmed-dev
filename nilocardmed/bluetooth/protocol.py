@@ -87,6 +87,8 @@ class CommandRouter:
             return self._context.settings.max_image_response_bytes
         if command == "camera_capture_chunk":
             return self._context.settings.max_chunk_response_bytes
+        if command == "wifi_scan":
+            return max(self._context.settings.max_response_bytes, 16384)
         return self._context.settings.max_response_bytes
 
     def handle(self, request: CommandRequest) -> CommandResponse:
@@ -171,6 +173,7 @@ class CommandRouter:
                 cmd=request.cmd,
                 id=request.id,
                 error=exc.as_error_string(),
+                data=exc.data,
             )
         except BluetoothAuthError as exc:
             trace_ble_command(

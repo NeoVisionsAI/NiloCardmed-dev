@@ -32,7 +32,7 @@ from nilocardmed.system.handlers import (
 )
 from nilocardmed.sampler.window import evaluate_window
 from nilocardmed.operations_log import trace_config
-from nilocardmed.wifi.exceptions import WifiError
+from nilocardmed.wifi.exceptions import WifiConnectionError, WifiError
 from nilocardmed.wifi.service import WifiService
 
 logger = logging.getLogger(__name__)
@@ -263,6 +263,8 @@ def handle_wifi_scan(ctx: CommandContext, request: CommandRequest) -> dict[str, 
         "networks": [network.to_dict() for network in result.networks],
         "scan_mode": result.scan_mode,
         "connected_preserved": result.connected_preserved,
+        "connection_restored": result.connection_restored,
+        "previous_ssid": result.previous_ssid,
     }
 
 
@@ -275,6 +277,16 @@ def handle_wifi_connect(ctx: CommandContext, request: CommandRequest) -> dict[st
     service = WifiService(config.wifi, config_manager=ctx.config_manager)
     try:
         status = service.connect(ssid, password, persist=persist)
+    except WifiConnectionError as exc:
+        raise BluetoothCommandError(
+            "wifi_connection_failed",
+            str(exc),
+            data={
+                "restored_previous": exc.restored_previous,
+                "previous_ssid": exc.previous_ssid,
+                "attempted_ssid": exc.attempted_ssid,
+            },
+        ) from exc
     except WifiError as exc:
         raise BluetoothCommandError("wifi_connection_failed", str(exc)) from exc
     trace_config(

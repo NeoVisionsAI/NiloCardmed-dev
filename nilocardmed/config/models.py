@@ -152,10 +152,10 @@ class WifiSettings(BaseModel):
     persist_to_config: bool = True
     auto_connect_on_startup: bool = False
     scan_rescan_when_connected: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Si false (recomendado en Pi), wifi_scan no fuerza rescan con WiFi conectado "
-            "(evita caída de SSH/internet en radio única)"
+            "Reservado para compatibilidad. El escaneo siempre fuerza rescan y, si había "
+            "conexión activa, intenta restaurarla tras listar redes."
         ),
     )
 
