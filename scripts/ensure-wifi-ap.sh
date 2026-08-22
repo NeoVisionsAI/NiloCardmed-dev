@@ -68,12 +68,16 @@ After=network-online.target NetworkManager.service
 Wants=network-online.target
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
+Type=simple
 Environment=INSTALL_DIR=${INSTALL_DIR}
 EnvironmentFile=-${INSTALL_DIR}/deploy.env
-ExecStart=${INSTALL_DIR}/scripts/wifi-ap-run.sh start
+ExecStartPre=${INSTALL_DIR}/scripts/wifi-ap-run.sh stop
+ExecStart=${INSTALL_DIR}/scripts/wifi-ap-run.sh run
 ExecStop=${INSTALL_DIR}/scripts/wifi-ap-run.sh stop
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
 TimeoutStartSec=180
 
 [Install]

@@ -100,7 +100,8 @@ has_existing_connection_password() {
 
 connection_password_is_valid() {
   local existing="$1"
-  [[ -n "${existing}" && "${existing}" != "changeme" && ${#existing} -ge 8 && ${#existing} -le 63 ]]
+  [[ -n "${existing}" && "${existing}" != "changeme" && ${#existing} -ge 8 && ${#existing} -le 63 \
+    && "${existing}" != *"#"* && "${existing}" != *$'\n'* && "${existing}" != *$'\r'* ]]
 }
 
 read_existing_connection_password() {
@@ -166,6 +167,8 @@ report_invalid_connection_password() {
     echo "[nilocardmed][ERROR] Mínimo 8 caracteres (WPA2); has introducido ${#pwd}." >/dev/tty
   elif [[ ${#pwd} -gt 63 ]]; then
     echo "[nilocardmed][ERROR] Máximo 63 caracteres (WPA2)." >/dev/tty
+  elif [[ "${pwd}" == *"#"* ]]; then
+    echo "[nilocardmed][ERROR] No puede contener '#' (limitación del AP WiFi)." >/dev/tty
   else
     echo "[nilocardmed][ERROR] Contraseña no válida para WPA2." >/dev/tty
   fi
