@@ -12,6 +12,7 @@ source "${SCRIPT_DIR}/lib/common.sh"
 DISABLE_GUI="${DISABLE_GUI:-false}"
 OPTIMIZE_GPU_MEM="${OPTIMIZE_GPU_MEM:-true}"
 GPU_MEM_MB="${NILOCARDMED_GPU_MEM_MB:-16}"
+GPU_MEM_DESKTOP_MB="${NILOCARDMED_GPU_MEM_DESKTOP_MB:-128}"
 
 find_boot_config() {
   local candidate
@@ -54,6 +55,22 @@ optimize_gpu_mem() {
 
   set_boot_config_kv "${config_file}" "gpu_mem" "${GPU_MEM_MB}"
   log_info "gpu_mem=${GPU_MEM_MB} aplicado en ${config_file} (reinicio recomendado)"
+}
+
+restore_gpu_mem_for_desktop() {
+  local config_file current=""
+  if ! config_file="$(find_boot_config)"; then
+    return 0
+  fi
+
+  current="$(grep -E '^[[:space:]]*gpu_mem=' "${config_file}" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d ' ' || true)"
+  if [[ -z "${current}" ]]; then
+    return 0
+  fi
+  if [[ "${current}" =~ ^[0-9]+$ ]] && (( current <= 32 )); then
+    set_boot_config_kv "${config_file}" "gpu_mem" "${GPU_MEM_DESKTOP_MB}"
+    log_info "gpu_mem=${current} → ${GPU_MEM_DESKTOP_MB} en ${config_file} (escritorio activo; reinicio recomendado)"
+  fi
 }
 
 disable_graphical_target() {
@@ -101,8 +118,9 @@ main() {
     fi
   else
     log_info "DISABLE_GUI=false — se mantiene el entorno gráfico"
+    restore_gpu_mem_for_desktop
     if is_true "${OPTIMIZE_GPU_MEM}"; then
-      log_warn "OPTIMIZE_GPU_MEM=true ignorado con escritorio activo (gpu_mem=16 ralentiza el ratón/X11)"
+      log_warn "OPTIMIZE_GPU_MEM=true ignorado con escritorio activo (gpu_mem bajo ralentiza el ratón/X11)"
       log_warn "Para liberar RAM sin GUI: DISABLE_GUI=true en deploy.env y reiniciar"
     fi
   fi
