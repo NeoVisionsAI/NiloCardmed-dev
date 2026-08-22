@@ -103,6 +103,9 @@ load_deploy_env
 ensure_run_user_groups "${NILOCARDMED_RUN_USER}"
 ensure_host_directories
 
+ensure_host_always_on "${INSTALL_DIR}"
+ensure_host_swap "${INSTALL_DIR}"
+
 # --- 6. Compose override (hot-plug cámara, BLE, WiFi) ---
 INSTALL_DIR="${INSTALL_DIR}" DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE}" \
   bash "${INSTALL_DIR}/scripts/generate-compose-override.sh"

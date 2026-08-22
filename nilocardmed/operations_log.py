@@ -96,8 +96,8 @@ def trace_ble_client(*, event: str, detail: str | None = None) -> None:
     trace("ble", f"cliente BLE {event}", data=data)
 
 
-def trace_wifi(*, event: str, ssid: str | None = None, ip: str | None = None) -> None:
-    data: dict[str, Any] = {"event": event}
+def trace_wifi(*, event: str, ssid: str | None = None, ip: str | None = None, **fields: Any) -> None:
+    data: dict[str, Any] = {"event": event, **{k: v for k, v in fields.items() if v is not None}}
     if ssid:
         data["ssid"] = ssid
     if ip:

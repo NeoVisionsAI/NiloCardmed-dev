@@ -37,7 +37,8 @@ Comandos:
   status    Estado del contenedor y salud
   stop      docker compose down (usa deploy.env, proyecto nilocardmed)
   logs      docker compose logs -f --tail=100
-  trace     Solo traza operativa (BLE, WiFi, config) en tiempo real
+  trace     Traza operativa BLE/WiFi (filtrada). Ver también: trace-full
+  trace-full  Todos los logs del contenedor (sin filtro grep)
   deploy    Alias de update.sh: código + Bluetooth host + rebuild opcional + restart
 
 Opciones (start / install / deploy):
@@ -80,7 +81,11 @@ parse_args() {
       exit 0
       ;;
     trace)
-      cmd_trace
+      cmd_trace "$@"
+      exit 0
+      ;;
+    trace-full | tracefull)
+      cmd_trace_full
       exit 0
       ;;
     deploy | update)
@@ -347,11 +352,26 @@ cmd_logs() {
 }
 
 cmd_trace() {
+  local mode="${1:-}"
   load_deploy_env
   cd "${INSTALL_DIR}"
   export COMPOSE_PROJECT_NAME COMPOSE_FILE
-  log_info "Traza operativa (Ctrl+C para salir). Filtro: nilocardmed.trace y mensajes TRACE"
-  compose_cmd logs -f --tail=50 2>&1 | grep --line-buffered -E 'nilocardmed\.trace| TRACE |Cliente BLE|WiFi conectado|autenticación BLE|bluetooth_activo|\[ble\]|\[wifi\]|\[config\]|\[system\]'
+  log_info "Traza operativa (Ctrl+C para salir)"
+  log_info "Si no ves wifi_scan: el comando no llegó al contenedor (timeout BLE / app)"
+  if [[ "${mode}" == "--full" ]]; then
+    cmd_trace_full
+    return
+  fi
+  compose_cmd logs -f --tail=80 2>&1 | grep --line-buffered -iE \
+    'nilocardmed\.trace|comando BLE|cliente BLE|wifi_scan|wifi_connect|wifi_scan_ok|wifi_scan_error|Escaneando redes|\[ble\]|\[wifi\]|\[config\]|\[system\]|invalid_password|wifi_error|bluetooth_activo|autenticación|auth '
+}
+
+cmd_trace_full() {
+  load_deploy_env
+  cd "${INSTALL_DIR}"
+  export COMPOSE_PROJECT_NAME COMPOSE_FILE
+  log_info "Logs completos del contenedor (Ctrl+C para salir)"
+  compose_cmd logs -f --tail=100
 }
 
 cmd_deploy() {

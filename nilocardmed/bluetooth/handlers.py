@@ -31,7 +31,7 @@ from nilocardmed.system.handlers import (
     handle_time_sync,
 )
 from nilocardmed.sampler.window import evaluate_window
-from nilocardmed.operations_log import trace_config
+from nilocardmed.operations_log import trace_config, trace_wifi
 from nilocardmed.wifi.exceptions import WifiConnectionError, WifiError
 from nilocardmed.wifi.service import WifiService
 
@@ -258,7 +258,15 @@ def handle_wifi_scan(ctx: CommandContext, request: CommandRequest) -> dict[str, 
     try:
         result = service.scan(rescan=rescan)
     except WifiError as exc:
+        trace_wifi(event="wifi_scan_error", detail=str(exc))
         raise BluetoothCommandError("wifi_error", str(exc)) from exc
+    trace_wifi(
+        event="wifi_scan_ok",
+        networks=len(result.networks),
+        scan_mode=result.scan_mode,
+        connected_preserved=result.connected_preserved,
+        request_id=request.id,
+    )
     return {
         "networks": [network.to_dict() for network in result.networks],
         "scan_mode": result.scan_mode,

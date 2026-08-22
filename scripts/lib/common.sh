@@ -309,3 +309,60 @@ ensure_bluetooth_host_ready() {
   # Tras tocar BlueZ (p. ej. restart bluetooth), dar tiempo al adaptador.
   sleep 3
 }
+
+# Pi 24/7: sin suspender, hibernar ni apagar pantalla por inactividad (requiere root).
+ensure_host_always_on() {
+  local install_dir="${1:-${INSTALL_DIR:-}}"
+
+  if [[ "${EUID}" -ne 0 ]]; then
+    log_debug "ensure_host_always_on: omitido (sin root)"
+    return 0
+  fi
+
+  local script=""
+  for candidate in \
+    "${install_dir}/scripts/ensure-host-always-on.sh" \
+    "${REPO_ROOT:-}/scripts/ensure-host-always-on.sh" \
+    "${SCRIPT_DIR:-}/ensure-host-always-on.sh"; do
+    if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+      script="${candidate}"
+      break
+    fi
+  done
+
+  if [[ -z "${script}" ]]; then
+    log_warn "ensure-host-always-on.sh no encontrado"
+    return 0
+  fi
+
+  log_info "=== Host always-on (sin suspender / blanking) ==="
+  bash "${script}" || log_warn "ensure-host-always-on falló — revisa permisos root"
+}
+
+# Swap mínima 1 GB en /var/swap si la Pi trae poca (Pi Zero 2 W). Ver docs/INCREASE_SWAP.md
+ensure_host_swap() {
+  local install_dir="${1:-${INSTALL_DIR:-}}"
+
+  if [[ "${EUID}" -ne 0 ]]; then
+    log_debug "ensure_host_swap: omitido (sin root)"
+    return 0
+  fi
+
+  local script=""
+  for candidate in \
+    "${install_dir}/scripts/ensure-host-swap.sh" \
+    "${REPO_ROOT:-}/scripts/ensure-host-swap.sh" \
+    "${SCRIPT_DIR:-}/ensure-host-swap.sh"; do
+    if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+      script="${candidate}"
+      break
+    fi
+  done
+
+  if [[ -z "${script}" ]]; then
+    log_warn "ensure-host-swap.sh no encontrado"
+    return 0
+  fi
+
+  bash "${script}" || log_warn "ensure-host-swap falló — revisa espacio en /var"
+}
