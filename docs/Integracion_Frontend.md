@@ -44,7 +44,7 @@ NiloCardmed-<uuid>
 
 Ejemplo: `NiloCardmed-d212bd98`.
 
-> **Importante:** El hostname de la Raspberry puede ser `cardmed`. Algunos escaneos muestran ese alias en lugar del nombre GATT. **Conecta siempre filtrando por prefijo `NiloCardmed`** o por el UUID de servicio.
+> **Importante:** El hostname de la Raspberry puede ser `cardmed`. Algunos escaneos nativos muestran ese alias. En **Web Bluetooth** conecta con **`namePrefix: 'NiloCardmed'`**. No uses el UUID de servicio como filtro de descubrimiento (ver §3.2).
 
 ### 3.1 Listar / seleccionar dispositivo (Web Bluetooth)
 
@@ -55,10 +55,12 @@ const SERVICE_UUID = '6e400010-b5a3-f393-e0a9-e50e24dcca9e';
 
 async function pickDevice() {
   return navigator.bluetooth.requestDevice({
-    // Opción A: prefijo de nombre (varios dispositivos en almacén)
+    // Opción A: prefijo de nombre (recomendado; varios dispositivos en almacén)
     filters: [{ namePrefix: 'NiloCardmed' }],
-    // Opción B: un dispositivo conocido
+    // Opción B: un dispositivo conocido (nombre completo con sufijo uuid)
     // filters: [{ name: 'NiloCardmed-d212bd98' }],
+    // El UUID de servicio va en optionalServices (acceso GATT tras conectar),
+    // NO en filters.services — el Pi no lo incluye en el paquete AD (§3.2).
     optionalServices: [SERVICE_UUID],
   });
 }
@@ -71,6 +73,80 @@ Si la app debe mostrar una lista propia, la única vía con Web Bluetooth es:
 3. Reconectar con el mismo objeto `BluetoothDevice` si la pestaña no se cerró, o repetir `requestDevice`.
 
 **No existe API estándar** para listar todos los BLE cercanos sin diálogo del SO.
+
+### 3.2 Visible en escáner nativo pero no en la app web
+
+Síntoma habitual: **nRF Connect**, escáner BLE de Android o un PC **sí listan** `NiloCardmed-d212bd98`, pero la PWA **no muestra el dispositivo** o el diálogo de `requestDevice` sale vacío.
+
+En casi todos los casos el Pi está anunciando correctamente (`GATT + advertisement OK` en logs). El fallo está en **cómo la app descubre el dispositivo con Web Bluetooth**, no en que el Bluetooth del dispositivo esté apagado.
+
+#### Por qué ocurre
+
+| Escáner nativo | Web Bluetooth (`requestDevice`) |
+|----------------|----------------------------------|
+| Muestra todos los anuncios LE cercanos | Solo muestra dispositivos que coinciden con **`filters`** |
+| No aplica filtros de la app | Requiere **gesto del usuario** (tap en botón) |
+| Ve el nombre aunque no lleve UUID en el AD | Si filtras mal, **no aparece en el picker** |
+
+El NiloCardmed anuncia **solo el nombre local** (`NiloCardmed-<uuid>`) en el paquete de advertising (límite 31 bytes de BLE). **No incluye el UUID de servicio en el AD.** Por tanto:
+
+| Filtro en la app | ¿Aparece en el picker? |
+|------------------|------------------------|
+| `{ namePrefix: 'NiloCardmed' }` | **Sí** (recomendado) |
+| `{ name: 'NiloCardmed-d212bd98' }` | Sí (solo ese dispositivo concreto) |
+| `{ name: 'NiloCardmed' }` (exacto, sin sufijo) | **No** |
+| `{ services: [SERVICE_UUID] }` | **No** (UUID no está en el advertising) |
+| Lista propia rellenada en background | **Imposible** con Web Bluetooth estándar |
+
+`optionalServices: [SERVICE_UUID]` sirve para **acceder al servicio GATT después de conectar**, no para descubrir el dispositivo en el escaneo del picker.
+
+#### Implementación correcta
+
+1. Botón explícito «Conectar dispositivo» (no auto-scan al cargar la página).
+2. Al pulsar → `navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'NiloCardmed' }], optionalServices: [SERVICE_UUID] })`.
+3. El usuario elige el dispositivo en el **diálogo del sistema** (Chrome / Android).
+4. Guardar `device.id` y `device.name` en `localStorage` para reconexiones.
+5. Si la pestaña sigue abierta, reutilizar el objeto `BluetoothDevice`; si no, repetir `requestDevice`.
+
+**No implementar** una lista de dispositivos rellenada por un escaneo continuo en JavaScript: la API no lo permite.
+
+#### Prueba de diagnóstico (solo debug)
+
+Si con filtros estrictos no aparece nada, probar temporalmente:
+
+```javascript
+await navigator.bluetooth.requestDevice({
+  acceptAllDevices: true,
+  optionalServices: [SERVICE_UUID],
+});
+```
+
+Si con `acceptAllDevices: true` **sí** sale `NiloCardmed-…`, el bug son los **`filters`** actuales de la app (casi siempre `services` o `name` exacto sin sufijo).
+
+#### Requisitos de entorno a verificar
+
+- App servida por **HTTPS** (excepto `http://localhost` en desarrollo).
+- **Chrome**, **Edge** o **Samsung Internet** en Android. **Safari / iOS no soporta Web Bluetooth.**
+- Permisos Bluetooth concedidos en el dispositivo.
+- No usar WebView sin soporte Web Bluetooth habilitado.
+
+#### Logs del Pi que no indican fallo de visibilidad
+
+Estos mensajes pueden aparecer aunque el dispositivo **sí sea visible** en escáneres nativos:
+
+- `ActiveInstances=0` + watchdog restaurando anuncio
+- `Discoverable/pairable no confirmados tras reintento`
+- `GATT registrado pero sin instancias LE activas`
+
+Si el escáner nativo lo ve y en logs hay `bluetooth_activo` / `BLE advertisement registrado`, priorizar revisar **filtros y flujo `requestDevice`** en el frontend.
+
+Comprobación opcional en la Pi:
+
+```bash
+bluetoothctl show | grep -iE 'Powered|Discoverable|Advertising|ActiveInstances|Alias'
+```
+
+El `Alias` debe ser `NiloCardmed-<uuid>` (ej. `NiloCardmed-d212bd98`).
 
 ---
 
@@ -936,7 +1012,8 @@ async function demo(password) {
 
 - [ ] HTTPS en producción
 - [ ] Botón explícito para `requestDevice`
-- [ ] Filtro `namePrefix: 'NiloCardmed'`
+- [ ] Filtro `namePrefix: 'NiloCardmed'` (no `name` exacto sin sufijo; no `filters.services`)
+- [ ] `optionalServices` con UUID GATT (no confundir con filtro de descubrimiento)
 - [ ] Notify TX antes de comandos
 - [ ] Reensamblador de frames `{t:"f"}`
 - [ ] Correlación por `id` petición/respuesta
