@@ -82,14 +82,14 @@ disable_graphical_target() {
   for unit in \
     lightdm.service \
     gdm3.service \
-    sddm.service \
-    graphical.target; do
+    sddm.service; do
     if systemctl list-unit-files "${unit}" >/dev/null 2>&1; then
       systemctl stop "${unit}" 2>/dev/null || true
       systemctl disable "${unit}" 2>/dev/null || true
       log_info "Desactivado: ${unit}"
     fi
   done
+  # No desactivar graphical.target: en algunas Pi OS puede complicar el arranque/red.
 
   if command -v raspi-config >/dev/null 2>&1; then
     # B2 = consola con autologin; B4 = consola sin autologin

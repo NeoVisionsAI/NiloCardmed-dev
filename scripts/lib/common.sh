@@ -364,6 +364,15 @@ ensure_host_swap() {
     return 0
   fi
 
+  if [[ -f "${install_dir}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${install_dir}/deploy.env" && set +a
+  fi
+  if ! is_true "${ENABLE_HOST_SWAP:-true}"; then
+    log_info "ENABLE_HOST_SWAP=false — omitiendo ensure-host-swap"
+    return 0
+  fi
+
   bash "${script}" || log_warn "ensure-host-swap falló — revisa espacio en /var"
 }
 

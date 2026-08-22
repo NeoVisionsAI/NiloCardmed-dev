@@ -49,6 +49,58 @@ Reinicio recomendado tras el primer despliegue.
 
 ---
 
+## Incidente: Pi que no arranca tras `update.sh` (causa raíz)
+
+### Qué pasó
+
+El script `ensure-host-swap.sh` comprobaba si `/var/swap` ya estaba en `/etc/fstab` con un `grep` **incorrecto**:
+
+```bash
+# BUG (exigía espacio ANTES de /var/swap; las líneas empiezan con /var/swap)
+grep -qE "[[:space:]]/var/swap[[:space:]]"
+```
+
+Cada `sudo ./scripts/update.sh` **añadía otra línea** a fstab. Con 6 líneas, el arranque intentaba activar la misma swap varias veces y **se colgaba** (sin SSH, pantalla negra tras el arco iris).
+
+Además, el script usaba `swapoff -a` al crear la swap. En una Pi Zero 2 W (512 MB) con Docker en marcha, eso puede provocar **OOM** y **corrupción del ext4**, de modo que aunque arreglaras fstab, la SD seguía inutilizable hasta `fsck` o re-flash.
+
+### Qué NO fue la causa
+
+| Cambio | ¿Rompe el arranque? |
+|--------|---------------------|
+| `cmdline.txt` / `consoleblank=0` | No (tu cmdline era válido) |
+| `hdmi_blanking=0` | No |
+| `gpu_mem=16` | Ratón lento, no brick |
+| Partición boot “vacía” en `root/boot/firmware` | Normal (montaje separado) |
+| Pantalla always-on / logind | No impide SSH |
+
+### Correcciones en el repo
+
+- Detección fstab con `^/var/swap` (inicio de línea).
+- `dedupe_fstab_swap` en cada ejecución.
+- Entrada fstab con `sw,nofail`.
+- No usar `swapoff -a` (solo desactiva `/var/swap` concreto).
+- `mkswap` + `swapon` OK antes de tocar fstab.
+- `gpu_mem=16` solo si `DISABLE_GUI=true`.
+- `ENABLE_HOST_SWAP=false` en `deploy.env` para omitir swap automática.
+
+### Tras reinstalar Pi OS
+
+```bash
+cd ~/dev/NiloCardmed-dev
+git pull
+sudo ./scripts/install.sh
+# Comprobar fstab ANTES del primer reboot:
+grep swap /etc/fstab    # debe haber 0 o 1 línea /var/swap
+sudo reboot
+```
+
+Si la SD es ≤ 32 GB o está muy llena: `ENABLE_HOST_SWAP=false` en `deploy.env` hasta ampliar almacenamiento.
+
+Ver también: [RECUPERACION_ARRANQUE.md](RECUPERACION_ARRANQUE.md)
+
+---
+
 ## 3. Pasos para la Integración Automatizada
 
 ### Opción A: Script de Shell Bash (`setup_swap.sh`)

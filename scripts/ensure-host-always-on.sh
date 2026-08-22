@@ -181,14 +181,21 @@ apply_active_tty_blanking_off() {
 }
 
 ensure_kernel_consoleblank() {
-  local cmdline_files=(/boot/firmware/cmdline.txt /boot/cmdline.txt)
+  local cmdline_files=()
+  if [[ -f /boot/firmware/cmdline.txt ]]; then
+    cmdline_files=(/boot/firmware/cmdline.txt)
+  elif [[ -f /boot/cmdline.txt ]]; then
+    cmdline_files=(/boot/cmdline.txt)
+  fi
+
   local file
   for file in "${cmdline_files[@]}"; do
     [[ -f "${file}" ]] || continue
+    # cmdline.txt debe ser UNA sola línea; no tocar ambos paths (evita duplicar parámetros).
     if grep -qE '(^| )consoleblank=' "${file}"; then
       sed -i 's/consoleblank=[0-9]*/consoleblank=0/g' "${file}"
     elif grep -q 'root=' "${file}"; then
-      sed -i 's/$/ consoleblank=0/' "${file}"
+      sed -i 's/[[:space:]]*$/ consoleblank=0/' "${file}"
     fi
     log_info "Kernel cmdline: consoleblank=0 en ${file}"
   done
