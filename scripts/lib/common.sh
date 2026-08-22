@@ -21,6 +21,17 @@ is_true() {
   esac
 }
 
+# Evita colgar install/update si systemctl/bluetoothctl quedan esperando D-Bus.
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${seconds}" "$@" || true
+  else
+    "$@" || true
+  fi
+}
+
 # BLUETOOTH_ENABLED (alias) o ENABLE_BLUETOOTH (deploy.env legacy).
 # Con ENABLE_WIFI_AP=true el BLE queda off (ahorro RAM/CPU en Pi Zero 2 W).
 resolve_bluetooth_enabled() {
@@ -540,39 +551,34 @@ ensure_bluetooth_disabled_for_wifi_ap() {
     log_info "BlueZ: AutoEnable=false (evita reencendido automático)"
   fi
 
+  # rfkill primero (instantáneo; no usa D-Bus — evita colgar el script)
+  if command -v rfkill >/dev/null 2>&1; then
+    run_with_timeout 2 rfkill block bluetooth
+    log_info "rfkill: bluetooth bloqueado"
+  fi
+
+  if command -v hciconfig >/dev/null 2>&1; then
+    run_with_timeout 2 hciconfig hci0 down
+  fi
+
   if systemctl list-unit-files bluetooth.service >/dev/null 2>&1; then
-    systemctl stop bluetooth.service 2>/dev/null || true
-    systemctl disable bluetooth.service 2>/dev/null || true
-    systemctl mask bluetooth.service 2>/dev/null || true
+    log_info "Deteniendo bluetooth.service (timeout 8 s)..."
+    run_with_timeout 2 systemctl kill --signal=SIGKILL bluetooth.service
+    run_with_timeout 8 systemctl stop bluetooth.service
+    run_with_timeout 5 systemctl disable bluetooth.service
+    run_with_timeout 5 systemctl mask bluetooth.service
   fi
 
   for unit in blueman-mechanism.service blueman-applet.service; do
     if systemctl list-unit-files "${unit}" >/dev/null 2>&1; then
-      systemctl stop "${unit}" 2>/dev/null || true
-      systemctl disable "${unit}" 2>/dev/null || true
+      run_with_timeout 5 systemctl stop "${unit}"
+      run_with_timeout 5 systemctl disable "${unit}"
     fi
   done
 
-  if command -v rfkill >/dev/null 2>&1; then
-    rfkill block bluetooth 2>/dev/null || true
-    while read -r idx _; do
-      [[ -n "${idx}" ]] || continue
-      rfkill block "${idx}" 2>/dev/null || true
-    done < <(rfkill list 2>/dev/null | grep -i bluetooth -B1 | grep '^[0-9]' | awk -F: '{print $1}')
-  fi
+  pkill -x blueman-applet 2>/dev/null || true
 
-  if command -v bluetoothctl >/dev/null 2>&1; then
-    bluetoothctl power off 2>/dev/null || true
-  fi
-
-  if command -v hciconfig >/dev/null 2>&1; then
-    hciconfig hci0 down 2>/dev/null || true
-  fi
-
-  if command -v btmgmt >/dev/null 2>&1; then
-    btmgmt power off 2>/dev/null || true
-  fi
-
-  log_info "Bluetooth: servicio enmascarado, rfkill block, adaptador apagado"
-  log_info "Nota: el icono del panel puede tardar en actualizarse; comprueba con: rfkill list bluetooth"
+  # No usar bluetoothctl/btmgmt aquí: cuelgan si bluetoothd está stopping/killed.
+  log_info "Bluetooth: servicio enmascarado + rfkill (sin GATT en Pi)"
+  log_info "Icono del panel: puede mentir hasta cerrar sesión; comprueba: rfkill list bluetooth"
 }

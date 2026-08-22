@@ -82,8 +82,7 @@ EOF
 chmod +x "${INSTALL_DIR}/scripts/wifi-ap-run.sh"
 systemctl daemon-reload
 systemctl enable nilocardmed-wifi-ap.service
-systemctl restart nilocardmed-wifi-ap.service || log_warn "El AP puede tardar hasta que wlan0 esté listo; reintenta: systemctl restart nilocardmed-wifi-ap"
+run_with_timeout 120 systemctl restart nilocardmed-wifi-ap.service \
+  || log_warn "El AP puede tardar hasta que wlan0 esté listo; reintenta: systemctl restart nilocardmed-wifi-ap"
 
 log_info "Servicio nilocardmed-wifi-ap habilitado"
-
-ensure_bluetooth_disabled_for_wifi_ap "${INSTALL_DIR}"
