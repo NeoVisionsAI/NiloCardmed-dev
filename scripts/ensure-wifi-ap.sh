@@ -66,6 +66,12 @@ if systemctl is-enabled --quiet hostapd.service 2>/dev/null; then
   log_info "hostapd del sistema deshabilitado (usamos instancia dedicada nilocardmed)"
 fi
 
+if systemctl is-enabled --quiet udhcpd.service 2>/dev/null; then
+  systemctl disable udhcpd.service 2>/dev/null || true
+  systemctl stop udhcpd.service 2>/dev/null || true
+  log_info "udhcpd del sistema deshabilitado (usamos instancia dedicada nilocardmed)"
+fi
+
 unit_path="/etc/systemd/system/nilocardmed-wifi-ap.service"
 cat >"${unit_path}" <<EOF
 [Unit]
@@ -100,6 +106,7 @@ systemctl enable nilocardmed-wifi-ap.service
 
 if run_with_timeout 120 systemctl restart nilocardmed-wifi-ap.service; then
   log_info "Servicio nilocardmed-wifi-ap activo"
+  "${INSTALL_DIR}/scripts/wifi-ap-run.sh" status 2>&1 || true
 else
   log_error "nilocardmed-wifi-ap falló al arrancar"
   "${INSTALL_DIR}/scripts/wifi-ap-run.sh" diagnose 2>&1 || true

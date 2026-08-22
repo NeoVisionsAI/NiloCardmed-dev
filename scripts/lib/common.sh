@@ -57,7 +57,7 @@ ensure_wifi_ap_packages() {
     return 0
   fi
   if ! command -v apt-get >/dev/null 2>&1; then
-    log_warn "apt-get no disponible — instala a mano: hostapd dnsmasq iw"
+    log_warn "apt-get no disponible — instala a mano: hostapd dnsmasq udhcpd iw"
     return 1
   fi
 
@@ -75,7 +75,7 @@ ensure_wifi_ap_packages() {
     return 0
   fi
 
-  log_info "=== Paquetes WiFi AP (hostapd, dnsmasq, iw) ==="
+  log_info "=== Paquetes WiFi AP (hostapd, dnsmasq, udhcpd, iw) ==="
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq hostapd dnsmasq udhcpd iw
 }
