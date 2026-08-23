@@ -149,6 +149,13 @@ class WifiSettings(BaseModel):
     verify_connectivity: bool = True
     connectivity_check_url: str = "http://connectivitycheck.gstatic.com/generate_204"
     connectivity_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    fail_connect_without_connectivity: bool = Field(
+        default=False,
+        description=(
+            "Si false, wifi_connect no falla cuando hay enlace activo pero el probe HTTP "
+            "de conectividad externa no responde (común en Docker/redes corporativas)"
+        ),
+    )
     persist_to_config: bool = True
     auto_connect_on_startup: bool = False
     scan_rescan_when_connected: bool = Field(

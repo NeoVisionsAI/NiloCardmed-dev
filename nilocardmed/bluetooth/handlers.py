@@ -357,6 +357,11 @@ def handle_wifi_connect(ctx: CommandContext, request: CommandRequest) -> dict[st
     )
     payload = status.to_dict()
     payload["success"] = bool(status.connected)
+    if status.connectivity_ok is False:
+        payload["connectivity_warning"] = (
+            "WiFi conectado; la comprobación HTTP de internet no respondió "
+            "(el enlace puede estar operativo)."
+        )
     return payload
 
 

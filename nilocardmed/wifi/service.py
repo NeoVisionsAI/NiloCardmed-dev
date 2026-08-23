@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from pydantic import SecretStr
 
@@ -65,6 +66,19 @@ class WifiService:
             )
         return status
 
+    def _verify_connectivity_with_retries(
+        self,
+        *,
+        attempts: int = 3,
+        delay_seconds: float = 2.0,
+    ) -> bool:
+        for attempt in range(attempts):
+            if self.backend.verify_connectivity():
+                return True
+            if attempt + 1 < attempts:
+                time.sleep(delay_seconds)
+        return False
+
     def connect(
         self,
         ssid: str,
@@ -82,7 +96,7 @@ class WifiService:
 
         status = self.backend.connect(ssid, password)
         if self.settings.verify_connectivity:
-            connectivity_ok = self.backend.verify_connectivity()
+            connectivity_ok = self._verify_connectivity_with_retries()
             status = WifiStatus(
                 interface=status.interface,
                 connected=status.connected,
@@ -94,16 +108,29 @@ class WifiService:
                 connectivity_ok=connectivity_ok,
             )
             if not connectivity_ok:
-                restored = False
-                restore = getattr(self.backend, "restore_connection", None)
-                if callable(restore) and snapshot and snapshot.get("ssid") != ssid:
-                    restored = bool(restore(snapshot))
-                raise WifiConnectionError(
-                    "Conectado a la red pero sin conectividad externa verificable",
-                    restored_previous=restored,
-                    previous_ssid=snapshot.get("ssid") if snapshot else None,
-                    attempted_ssid=ssid,
+                linked = bool(
+                    status.connected
+                    and status.ssid == ssid
+                    and status.ip_address
                 )
+                if linked and not self.settings.fail_connect_without_connectivity:
+                    logger.warning(
+                        "WiFi conectado a %s (%s) pero probe HTTP falló; "
+                        "continuando (fail_connect_without_connectivity=false)",
+                        ssid,
+                        status.ip_address,
+                    )
+                elif self.settings.fail_connect_without_connectivity or not linked:
+                    restored = False
+                    restore = getattr(self.backend, "restore_connection", None)
+                    if callable(restore) and snapshot and snapshot.get("ssid") != ssid:
+                        restored = bool(restore(snapshot))
+                    raise WifiConnectionError(
+                        "Conectado a la red pero sin conectividad externa verificable",
+                        restored_previous=restored,
+                        previous_ssid=snapshot.get("ssid") if snapshot else None,
+                        attempted_ssid=ssid,
+                    )
 
         if persist_cfg and self._config_manager is not None:
             self._persist_credentials(ssid, password)

@@ -21,6 +21,23 @@ logger = logging.getLogger(__name__)
 
 _SECURITY_UNKNOWN = "UNKNOWN"
 
+_DEFAULT_CONNECTIVITY_URLS = (
+    "http://connectivitycheck.gstatic.com/generate_204",
+    "http://www.msftconnecttest.com/connecttest.txt",
+    "http://connectivitycheck.android.com/generate_204",
+    "http://captive.apple.com/hotspot-detect.html",
+)
+
+
+def _connectivity_probe_urls(primary: str) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for url in (primary, *_DEFAULT_CONNECTIVITY_URLS):
+        if url and url not in seen:
+            seen.add(url)
+            ordered.append(url)
+    return ordered
+
 
 class WifiBackend(ABC):
     """Interfaz común para escanear, conectar y consultar WiFi."""
@@ -49,16 +66,25 @@ class WifiBackend(ABC):
     def verify_connectivity(self) -> bool:
         if not self.settings.verify_connectivity:
             return True
-        try:
-            response = httpx.get(
-                self.settings.connectivity_check_url,
-                timeout=self.settings.connectivity_timeout_seconds,
-                follow_redirects=False,
-            )
-            return response.status_code in (204, 200)
-        except httpx.HTTPError as exc:
-            logger.warning("Comprobación de conectividad fallida: %s", exc)
-            return False
+        timeout = self.settings.connectivity_timeout_seconds
+        for url in _connectivity_probe_urls(self.settings.connectivity_check_url):
+            try:
+                response = httpx.get(
+                    url,
+                    timeout=timeout,
+                    follow_redirects=False,
+                )
+                if response.status_code in (204, 200):
+                    logger.debug("Conectividad OK (%s → %s)", url, response.status_code)
+                    return True
+            except Exception as exc:
+                logger.debug("Probe conectividad falló (%s): %s", url, exc)
+        logger.warning(
+            "Comprobación de conectividad fallida en todos los endpoints probados "
+            "(backend=%s)",
+            self.name,
+        )
+        return False
 
 
 class HostScriptBackend(WifiBackend):
@@ -171,6 +197,23 @@ class HostScriptBackend(WifiBackend):
     def disconnect(self) -> WifiStatus:
         payload = self._run("disconnect")
         return _status_from_dict(payload, self.settings.interface)
+
+    def verify_connectivity(self) -> bool:
+        if not self.settings.verify_connectivity:
+            return True
+        try:
+            payload = self._run(
+                "test",
+                extra_env={
+                    "WIFI_CONNECTIVITY_URL": self.settings.connectivity_check_url,
+                    "WIFI_CONNECTIVITY_TIMEOUT": str(self.settings.connectivity_timeout_seconds),
+                },
+            )
+            if payload.get("connectivity_ok"):
+                return True
+        except WifiBackendError as exc:
+            logger.warning("Probe conectividad vía host script falló: %s", exc)
+        return super().verify_connectivity()
 
 
 class NmcliBackend(WifiBackend):

@@ -620,6 +620,68 @@ def disconnect() -> dict:
     return status()
 
 
+def connectivity_probe_urls() -> list[str]:
+    primary = os.environ.get(
+        "WIFI_CONNECTIVITY_URL",
+        "http://connectivitycheck.gstatic.com/generate_204",
+    )
+    fallbacks = [
+        "http://connectivitycheck.gstatic.com/generate_204",
+        "http://www.msftconnecttest.com/connecttest.txt",
+        "http://connectivitycheck.android.com/generate_204",
+        "http://captive.apple.com/hotspot-detect.html",
+    ]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for url in [primary, *fallbacks]:
+        if url and url not in seen:
+            seen.add(url)
+            ordered.append(url)
+    return ordered
+
+
+def http_probe(url: str, timeout: int) -> bool:
+    curl = shutil.which("curl")
+    if curl:
+        result = subprocess.run(
+            [
+                curl,
+                "-s",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "--connect-timeout",
+                str(timeout),
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout + 3,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip() in {"200", "204"}:
+            return True
+
+    try:
+        import urllib.error
+        import urllib.request
+
+        request = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status in (200, 204)
+    except (OSError, urllib.error.URLError, ValueError):
+        return False
+
+
+def test_connectivity() -> dict:
+    timeout = int(os.environ.get("WIFI_CONNECTIVITY_TIMEOUT", "10"))
+    for url in connectivity_probe_urls():
+        if http_probe(url, timeout):
+            return {"connectivity_ok": True, "check_url": url}
+    return {"connectivity_ok": False}
+
+
 if COMMAND == "scan":
     print(json.dumps(scan(), ensure_ascii=False))
 elif COMMAND == "status":
@@ -643,6 +705,8 @@ elif COMMAND == "restore":
     payload = status()
     payload["restored"] = restored
     print(json.dumps(payload, ensure_ascii=False))
+elif COMMAND == "test":
+    print(json.dumps(test_connectivity(), ensure_ascii=False))
 else:
     print(f"Comando no reconocido: {COMMAND}", file=sys.stderr)
     sys.exit(1)

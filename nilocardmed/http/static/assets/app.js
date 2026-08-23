@@ -531,7 +531,12 @@
         { ssid, password, persist: true },
         TIMEOUT.wifiConnect,
       );
-      toast("WiFi configurado.");
+      const data = res.data || {};
+      if (data.connectivity_ok === false) {
+        toast("WiFi conectado. El probe de internet no respondió, pero el enlace está activo.");
+      } else {
+        toast("WiFi configurado.");
+      }
       const pre = $("#wifi-result");
       pre.textContent = JSON.stringify(res, null, 2);
       show(pre);
