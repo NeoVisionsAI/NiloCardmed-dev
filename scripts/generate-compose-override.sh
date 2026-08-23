@@ -71,6 +71,11 @@ if is_true "${ENABLE_WIFI:-false}"; then
     if [[ -x /usr/sbin/iw ]]; then
       volumes+=("/usr/sbin/iw:/usr/sbin/iw:ro")
       log_info "Contenedor: iw del host montado (/usr/sbin/iw)"
+    elif [[ -x /sbin/iw ]]; then
+      volumes+=("/sbin/iw:/sbin/iw:ro")
+      log_info "Contenedor: iw del host montado (/sbin/iw)"
+    else
+      log_warn "iw no encontrado en el host — escaneo AP+STA limitado; apt install iw"
     fi
     if [[ -x /usr/sbin/ip ]]; then
       volumes+=("/usr/sbin/ip:/usr/sbin/ip:ro")

@@ -23,6 +23,11 @@ if ! is_true "${ENABLE_WIFI:-false}"; then
   exit 0
 fi
 
+if ! command -v iw >/dev/null 2>&1; then
+  log_info "Instalando iw (escaneo WiFi en AP+STA)..."
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iw iproute2 || log_warn "No se pudo instalar iw"
+fi
+
 APP_UID="${APP_UID:-1000}"
 RUN_USER="${NILOCARDMED_RUN_USER:-$(getent passwd "${APP_UID}" | cut -d: -f1 || echo "")}"
 WIFI_SCRIPT="${INSTALL_DIR}/scripts/wifi-host.sh"

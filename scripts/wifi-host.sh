@@ -134,13 +134,29 @@ def _dbm_to_signal_percent(dbm: int | float | None) -> int | None:
 
 
 def iw_binary() -> str | None:
-    for candidate in (
+    candidates: list[str] = []
+    for item in (
         os.environ.get("WIFI_IW_BINARY"),
         shutil.which("iw"),
         "/usr/sbin/iw",
         "/sbin/iw",
     ):
-        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        if item and item not in candidates:
+            candidates.append(item)
+
+    for candidate in candidates:
+        if not os.path.isfile(candidate) or not os.access(candidate, os.X_OK):
+            continue
+        try:
+            probe = subprocess.run(
+                [candidate, "help"],
+                capture_output=True,
+                timeout=3,
+                check=False,
+            )
+        except (FileNotFoundError, OSError):
+            continue
+        if probe.returncode in (0, 1):
             return candidate
     return None
 
@@ -170,13 +186,16 @@ def ap_interface_up() -> bool:
     if not ip_bin:
         return False
 
-    result = subprocess.run(
-        [ip_bin, "link", "show", ap_if],
-        capture_output=True,
-        text=True,
-        timeout=3,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [ip_bin, "link", "show", ap_if],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return False
     if result.returncode != 0:
         return False
     text = result.stdout
@@ -212,20 +231,24 @@ def iw_scan_networks(*, wait_seconds: float | None = None) -> list[dict]:
 
     wait = wait_seconds if wait_seconds is not None else max(SCAN_WAIT_SECONDS, 2.0)
 
-    subprocess.run(
-        [iw, "dev", INTERFACE, "scan", "trigger"],
-        check=False,
-        capture_output=True,
-        timeout=8,
-    )
-    time.sleep(wait)
-    result = subprocess.run(
-        [iw, "dev", INTERFACE, "scan", "dump"],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    try:
+        subprocess.run(
+            [iw, "dev", INTERFACE, "scan", "trigger"],
+            check=False,
+            capture_output=True,
+            timeout=8,
+        )
+        time.sleep(wait)
+        result = subprocess.run(
+            [iw, "dev", INTERFACE, "scan", "dump"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return []
+
     if result.returncode != 0:
         return []
 
