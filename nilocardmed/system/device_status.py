@@ -14,6 +14,7 @@ from nilocardmed.config.manager import ConfigManager
 from nilocardmed.sampler.window import evaluate_window
 from nilocardmed.storage.manager import StorageManager
 from nilocardmed.system.power import collect_battery_status
+from nilocardmed.system.public_ip import collect_network_addresses
 from nilocardmed.system.thermal import collect_cpu_temperature
 from nilocardmed.telemetry.store import telemetry
 from nilocardmed.wifi.exceptions import WifiError
@@ -114,12 +115,22 @@ def build_device_status(ctx: CommandContext) -> dict[str, Any]:
             "error": str(exc),
         }
 
+    network = collect_network_addresses(
+        private_ip=wifi.get("ip_address"),
+        wifi_connected=bool(wifi.get("connected")),
+    )
+    system = {
+        **collect_cpu_temperature(),
+        **network,
+    }
+
     return {
         "device_name": config.bluetooth.device_name,
         "version": __version__,
         "wifi": wifi,
+        "network": network,
         "power": collect_battery_status(),
-        "system": collect_cpu_temperature(),
+        "system": system,
         "sampling": sampling,
         "camera": camera_status(ctx),
         "captures": capture_statistics(ctx),

@@ -185,17 +185,27 @@
     const camera = data?.camera || {};
     const captures = data?.captures || {};
     const system = data?.system || {};
+    const network = data?.network || system;
 
     const wifiConnected = wifi.connected === true;
+    const privateIp = network.private_ip || wifi.ip_address || null;
+    const publicIp = network.public_ip || null;
+
     const cards = [
       {
         title: "WiFi",
         rows: [
           ["Activo", wifiConnected ? "Sí" : "No", wifiConnected],
           ["SSID", wifiConnected ? (wifi.ssid || NA) : NA],
-          ["IP", wifiConnected ? (wifi.ip_address || NA) : NA],
           ["Señal", wifiConnected && wifi.signal != null ? `${wifi.signal} dBm` : NA],
           ["Internet", wifiConnected ? (wifi.connectivity_ok ? "Sí" : "No") : null],
+        ],
+      },
+      {
+        title: "Red",
+        rows: [
+          ["IP privada", privateIp || NA],
+          ["IP pública", publicIp || (wifiConnected ? "No disponible" : NA)],
         ],
       },
       {
