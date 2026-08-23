@@ -6,6 +6,7 @@ from pathlib import Path
 
 from nilocardmed.camera.discovery import (
     _dedupe_physical_cameras,
+    _fetch_v4l2_identity,
     is_internal_v4l2_device,
     is_physical_camera,
 )
@@ -40,6 +41,20 @@ def test_usb_detected_from_v4l2_probe():
     device = CameraDevice(path=Path("/dev/video0"), name="video0", supports_capture=True)
     identity = ("uvcvideo", "usb-3f980000.usb-1", "USB Camera: USB Camera")
     assert is_physical_camera(device, v4l2_identity=identity) is True
+
+
+def test_fetch_v4l2_identity_handles_probe_failure():
+    from unittest.mock import patch
+
+    with patch(
+        "nilocardmed.camera.discovery._run_v4l2_ctl",
+        return_value=type("R", (), {"returncode": 1, "stdout": "", "stderr": "No such device"})(),
+    ):
+        assert _fetch_v4l2_identity(
+            Path("/dev/video0"),
+            v4l2_ctl_binary="v4l2-ctl",
+            timeout=1,
+        ) == (None, None, None)
 
 
 def test_dedupe_keeps_lowest_video_node_per_usb_camera():

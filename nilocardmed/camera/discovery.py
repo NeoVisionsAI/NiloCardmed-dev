@@ -135,11 +135,15 @@ def _fetch_v4l2_identity(
             ["-d", str(device_path), "--all"],
             binary=v4l2_ctl_binary,
             timeout=timeout,
-            check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None, None, None
     if result.returncode != 0:
+        logger.debug(
+            "v4l2-ctl identidad %s: %s",
+            device_path,
+            result.stderr.strip() or result.stdout.strip(),
+        )
         return None, None, None
     return _parse_v4l2_identity(result.stdout)
 
@@ -271,6 +275,15 @@ def list_cameras(
                     timeout=discovery_timeout_seconds,
                 )
                 if not is_physical_camera(device, v4l2_identity=identity):
+                    continue
+            else:
+                # Confirmar que responde (evita nodos USB obsoletos tras desenchufar).
+                identity = _fetch_v4l2_identity(
+                    device.path,
+                    v4l2_ctl_binary=v4l2_ctl_binary,
+                    timeout=discovery_timeout_seconds,
+                )
+                if identity == (None, None, None):
                     continue
             if identity and identity[0]:
                 driver_name, bus_info, card_type = identity
