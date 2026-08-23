@@ -532,6 +532,6 @@ setup_deploy_and_app_env() {
   log_info "  connection_password=(configurada en .env como NILOCARDMED_CONNECTION_PASSWORD)"
   if [[ "${EUID}" -eq 0 ]]; then
     ensure_install_dir_permissions "${install_dir}"
-    restart_wifi_ap_if_enabled "${install_dir}"
+    # El reinicio del AP se hace una sola vez al final de install.sh (evita 2–3 wait-ready seguidos).
   fi
 }

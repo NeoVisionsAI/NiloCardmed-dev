@@ -104,6 +104,11 @@ chmod +x "${INSTALL_DIR}/scripts/wifi-ap-hostapd-action.sh"
 systemctl daemon-reload
 systemctl enable nilocardmed-wifi-ap.service
 
+if systemctl is-active --quiet nilocardmed-wifi-ap.service 2>/dev/null; then
+  log_info "AP WiFi ya activo — omitiendo reinicio aquí (install.sh lo reinicia al final del deploy)"
+  exit 0
+fi
+
 if run_with_timeout 120 systemctl restart nilocardmed-wifi-ap.service; then
   if INSTALL_DIR="${INSTALL_DIR}" "${INSTALL_DIR}/scripts/wifi-ap-run.sh" wait-ready; then
     log_info "Servicio nilocardmed-wifi-ap activo"

@@ -808,9 +808,10 @@ status_ap() {
 
 wait_for_ap_ready() {
   local attempt ssid=""
+  local max_attempts="${WIFI_AP_WAIT_ATTEMPTS:-30}"
   load_deploy_env
-  log "Esperando AP (${AP_INTERFACE} + hostapd)..."
-  for attempt in $(seq 1 45); do
+  log "Esperando AP (${AP_INTERFACE} + hostapd, máx. $((max_attempts * 2)) s)..."
+  for attempt in $(seq 1 "${max_attempts}"); do
     if hostapd_is_running && ip link show "${AP_INTERFACE}" >/dev/null 2>&1; then
       ssid="$(iw dev "${AP_INTERFACE}" info 2>/dev/null | awk -F: '/ssid/ {print $2; exit}' | sed 's/^[[:space:]]*//')"
       if [[ -n "${ssid}" ]]; then
@@ -820,7 +821,7 @@ wait_for_ap_ready() {
     fi
     sleep 2
   done
-  log_error "AP no listo tras 90 s — hostapd=$(hostapd_is_running && echo OK || echo NO) uap0=$(ip link show "${AP_INTERFACE}" >/dev/null 2>&1 && echo OK || echo NO)"
+  log_error "AP no listo tras $((max_attempts * 2)) s — hostapd=$(hostapd_is_running && echo OK || echo NO) uap0=$(ip link show "${AP_INTERFACE}" >/dev/null 2>&1 && echo OK || echo NO)"
   return 1
 }
 
