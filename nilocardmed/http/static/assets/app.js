@@ -11,15 +11,16 @@
     dashboard: 10000,
     auth: 30000,
     command: 30000,
-    wifiScan: 60000,
+    wifiScan: 90000,
     wifiConnect: 90000,
     cardmedTest: 90000,
-    scanMinWait: 4000,
+    scanMinWait: 7000,
+    scanRetryWait: 4000,
   };
 
   let token = sessionStorage.getItem(TOKEN_KEY) || "";
   let dashboard = null;
-  let commandBusy = false;
+  let loadingDepth = 0;
   let toastTimer = null;
 
   const $ = (sel) => document.querySelector(sel);
@@ -27,6 +28,28 @@
 
   function show(el) { el.hidden = false; }
   function hide(el) { el.hidden = true; }
+
+  function setLoading(on) {
+    loadingDepth += on ? 1 : -1;
+    if (loadingDepth < 0) loadingDepth = 0;
+    const bar = $("#loading-bar");
+    if (loadingDepth > 0) {
+      show(bar);
+      bar.setAttribute("aria-hidden", "false");
+    } else {
+      hide(bar);
+      bar.setAttribute("aria-hidden", "true");
+    }
+  }
+
+  async function withLoading(fn) {
+    setLoading(true);
+    try {
+      return await fn();
+    } finally {
+      setLoading(false);
+    }
+  }
 
   function toast(msg, ms = 3200) {
     const el = $("#toast");
@@ -103,17 +126,21 @@
     return res.data;
   }
 
+  let commandBusy = false;
+
   async function runQueued(fn) {
     if (commandBusy) {
       toast("Espera a que termine la operación anterior…");
       return null;
     }
     commandBusy = true;
-    try {
-      return await fn();
-    } finally {
-      commandBusy = false;
-    }
+    return withLoading(async () => {
+      try {
+        return await fn();
+      } finally {
+        commandBusy = false;
+      }
+    });
   }
 
   function formatIsoDate(iso) {
@@ -131,14 +158,24 @@
     let source = power.source_label || NA;
     let level = NA;
     if (src === "mains") { source = "Corriente"; level = "100 %"; }
-    else if (src === "usb") { source = "USB / alimentación externa"; level = "100 %"; }
+    else if (src === "usb") { source = "USB"; level = "100 %"; }
     else if (src === "powerbank") {
-      source = "Powerbank / batería";
+      source = "Powerbank";
       level = power.display_percent != null ? `${power.display_percent} %` : NA;
     } else {
       level = power.display_percent != null ? `${power.display_percent} %` : NA;
     }
     return { source, level };
+  }
+
+  function formatTemp(system) {
+    if (!system || !system.available || system.celsius == null) return NA;
+    return `${system.celsius} °C`;
+  }
+
+  function statusVal(value, positive) {
+    const cls = positive === true ? " status-row__val--ok" : positive === false ? " status-row__val--warn" : "";
+    return `<span class="status-row__val${cls}">${value ?? NA}</span>`;
   }
 
   function buildStatusCards(data) {
@@ -147,17 +184,18 @@
     const sampling = data?.sampling || {};
     const camera = data?.camera || {};
     const captures = data?.captures || {};
+    const system = data?.system || {};
 
     const wifiConnected = wifi.connected === true;
     const cards = [
       {
         title: "WiFi",
         rows: [
-          ["Activo", wifiConnected ? "Sí" : "No"],
+          ["Activo", wifiConnected ? "Sí" : "No", wifiConnected],
           ["SSID", wifiConnected ? (wifi.ssid || NA) : NA],
           ["IP", wifiConnected ? (wifi.ip_address || NA) : NA],
           ["Señal", wifiConnected && wifi.signal != null ? `${wifi.signal} dBm` : NA],
-          ["Internet", wifiConnected ? (wifi.connectivity_ok ? "Sí" : "No") : NA],
+          ["Internet", wifiConnected ? (wifi.connectivity_ok ? "Sí" : "No") : null],
         ],
       },
       {
@@ -165,30 +203,34 @@
         rows: [["Fuente", power.source], ["Nivel", power.level]],
       },
       {
+        title: "Sistema",
+        rows: [["Temperatura", formatTemp(system)]],
+      },
+      {
         title: "Muestreo",
         rows: [
           ["Intervalo", sampling.interval_seconds != null ? `${sampling.interval_seconds} s` : NA],
-          ["Estado", sampling.window_active ? "Activo" : "Inactivo"],
+          ["Estado", sampling.window_active ? "Activo" : "Inactivo", sampling.window_active],
         ],
       },
       {
         title: "Cámara",
         rows: [
-          ["Conectada", camera.connected ? "Sí" : "No"],
+          ["Conectada", camera.connected ? "Sí" : "No", camera.connected],
           ["Detectadas", camera.cameras_count != null ? String(camera.cameras_count) : NA],
-          ["Guardada en Pi", camera.saved_device_present ? "Sí" : "No"],
+          ["Guardada", camera.saved_device_present ? "Sí" : "No", camera.saved_device_present],
           ["Dispositivo", camera.saved_device || NA],
         ],
       },
       {
-        title: "Última config",
+        title: "Config",
         rows: [["Guardada", formatIsoDate(data?.config_last_saved_at)]],
       },
       {
         title: "Capturas",
         rows: [
           ["Ciclos OK", captures.cycles_successful != null ? String(captures.cycles_successful) : NA],
-          ["Imágenes en disco", captures.images_on_disk != null ? String(captures.images_on_disk) : NA],
+          ["En disco", captures.images_on_disk != null ? String(captures.images_on_disk) : NA],
         ],
       },
     ];
@@ -197,9 +239,22 @@
     grid.innerHTML = cards.map((c) => `
       <article class="status-card">
         <h3 class="status-card__title">${c.title}</h3>
-        <dl>${c.rows.map(([k, v]) => `<dt>${k}</dt><dd>${v ?? NA}</dd>`).join("")}</dl>
+        <div class="status-card__rows">
+          ${c.rows.map(([k, v, positive]) => `
+            <div class="status-row">
+              <span class="status-row__key">${k}</span>
+              ${statusVal(v, positive)}
+            </div>`).join("")}
+        </div>
       </article>
     `).join("");
+  }
+
+  function syncCaptureIntervalInput() {
+    const input = $("#capture-interval");
+    if (!input || !dashboard?.sampling) return;
+    const val = dashboard.sampling.interval_seconds;
+    if (val != null) input.value = String(val);
   }
 
   async function fetchDashboard() {
@@ -219,6 +274,7 @@
     try {
       dashboard = await fetchDashboard();
       buildStatusCards(dashboard);
+      syncCaptureIntervalInput();
       $("#dashboard-meta").textContent = dashboard.refreshed_at
         ? `Actualizado: ${formatIsoDate(dashboard.refreshed_at)}`
         : "Actualizado";
@@ -234,8 +290,9 @@
       if (res.ok && res.data) {
         const name = res.data.device_name || res.data.device || "Nilocardmed";
         const ver = res.data.version || "";
-        $("#header-subtitle").textContent = ver ? `${name} · v${ver}` : name;
-        $("#login-subtitle").textContent = ver ? `${name} · v${ver}` : name;
+        const label = ver ? `${name} · v${ver}` : name;
+        $("#header-subtitle").textContent = label;
+        $("#login-subtitle").textContent = label;
       }
     } catch { /* ignore */ }
   }
@@ -243,10 +300,8 @@
   function showView(name) {
     hide($("#view-login"));
     hide($("#view-main"));
-    hide($("#view-done"));
     if (name === "login") show($("#view-login"));
     if (name === "main") show($("#view-main"));
-    if (name === "done") show($("#view-done"));
   }
 
   function setAuthenticated(on) {
@@ -267,6 +322,9 @@
     $$(".tab-panel").forEach((p) => hide(p));
     const panel = $(`#panel-${tabId}`);
     if (panel) show(panel);
+    if (tabId === "wifi" && $("#wifi-ssid").options.length <= 1) {
+      $("#btn-wifi-scan").click();
+    }
   }
 
   function bindPasswordToggle(inputId, btnId) {
@@ -281,16 +339,127 @@
 
   function formatScanMode(mode) {
     if (!mode) return "";
-    if (String(mode).includes("iw")) return "Escaneo ampliado (rescan + iw)";
-    return `Modo: ${mode}`;
+    if (String(mode).includes("iw")) return "Escaneo ampliado (iw)";
+    return String(mode);
   }
 
-  async function withScanMinWait(promise) {
+  async function withScanMinWait(promise, ms = TIMEOUT.scanMinWait) {
     const [result] = await Promise.all([
       promise,
-      new Promise((r) => setTimeout(r, TIMEOUT.scanMinWait)),
+      new Promise((r) => setTimeout(r, ms)),
     ]);
     return result;
+  }
+
+  function fillWifiSelect(networks) {
+    const select = $("#wifi-ssid");
+    const current = select.value;
+    select.innerHTML = '<option value="">— Selecciona red —</option>';
+    networks.forEach((n) => {
+      const opt = document.createElement("option");
+      opt.value = n.ssid;
+      const sig = n.signal != null ? ` (${n.signal}${n.signal > 0 && n.signal <= 100 ? "%" : " dBm"})` : "";
+      const active = n.in_use ? " ★" : "";
+      opt.textContent = `${n.ssid}${sig}${active}`;
+      select.appendChild(opt);
+    });
+    if (current && networks.some((n) => n.ssid === current)) {
+      select.value = current;
+    }
+  }
+
+  async function performWifiScan(retry = false) {
+    const res = await apiCommand(
+      "wifi_scan",
+      { rescan: true },
+      TIMEOUT.wifiScan,
+    );
+    let networks = res.data?.networks || [];
+
+    if (!retry && networks.length <= 1) {
+      await new Promise((r) => setTimeout(r, TIMEOUT.scanRetryWait));
+      const retryRes = await apiCommand(
+        "wifi_scan",
+        { rescan: true },
+        TIMEOUT.wifiScan,
+      );
+      const retryNetworks = retryRes.data?.networks || [];
+      if (retryNetworks.length > networks.length) {
+        networks = retryNetworks;
+        res.data = retryRes.data;
+      }
+    }
+
+    return { networks, scanMode: res.data?.scan_mode };
+  }
+
+  function resetCameraPreview() {
+    const img = $("#camera-image");
+    img.removeAttribute("src");
+    img.alt = "";
+    hide(img);
+    show($("#camera-placeholder"));
+  }
+
+  function showCameraImage(src) {
+    const img = $("#camera-image");
+    const ph = $("#camera-placeholder");
+    return new Promise((resolve, reject) => {
+      img.onload = () => {
+        hide(ph);
+        show(img);
+        resolve();
+      };
+      img.onerror = () => {
+        resetCameraPreview();
+        reject(new Error("No se pudo mostrar la imagen capturada"));
+      };
+      img.alt = "Captura de prueba";
+      img.src = src;
+    });
+  }
+
+  async function loadChunkedCapture(meta) {
+    const parts = [];
+    const total = meta.total_chunks || 0;
+    for (let i = 0; i < total; i += 1) {
+      const chunk = await apiCommand(
+        "camera_capture_chunk",
+        { capture_id: meta.capture_id, index: i },
+        TIMEOUT.command,
+      );
+      const b64 = chunk.data?.chunk_base64;
+      if (!b64) throw new Error(`Chunk ${i} vacío`);
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let j = 0; j < binary.length; j += 1) bytes[j] = binary.charCodeAt(j);
+      parts.push(bytes);
+    }
+    const totalLen = parts.reduce((sum, p) => sum + p.length, 0);
+    const merged = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const part of parts) {
+      merged.set(part, offset);
+      offset += part.length;
+    }
+    const blob = new Blob([merged], { type: "image/jpeg" });
+    return URL.createObjectURL(blob);
+  }
+
+  async function displayCaptureResult(data) {
+    resetCameraPreview();
+    if (data.mode === "base64" && data.image_base64) {
+      await showCameraImage(`data:image/jpeg;base64,${data.image_base64}`);
+    } else if (data.mode === "chunked" && data.total_chunks) {
+      const url = await loadChunkedCapture(data);
+      try {
+        await showCameraImage(url);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } else {
+      throw new Error(data.hint || "Respuesta de captura sin imagen");
+    }
   }
 
   // --- Login ---
@@ -298,20 +467,22 @@
     e.preventDefault();
     hide($("#login-error"));
     const password = $("#login-password").value;
-    try {
-      const res = await apiCommand("auth", { password }, TIMEOUT.auth);
-      token = res.data?.token || "";
-      if (!token) throw new Error("Contraseña incorrecta");
-      sessionStorage.setItem(TOKEN_KEY, token);
-      toast("Sesión iniciada.");
-      setAuthenticated(true);
-    } catch (err) {
-      const msg = String(err.message || "").includes("invalid_password")
-        ? "Contraseña incorrecta"
-        : formatError(err);
-      $("#login-error").textContent = msg;
-      show($("#login-error"));
-    }
+    await withLoading(async () => {
+      try {
+        const res = await apiCommand("auth", { password }, TIMEOUT.auth);
+        token = res.data?.token || "";
+        if (!token) throw new Error("Contraseña incorrecta");
+        sessionStorage.setItem(TOKEN_KEY, token);
+        toast("Sesión iniciada.");
+        setAuthenticated(true);
+      } catch (err) {
+        const msg = String(err.message || "").includes("invalid_password")
+          ? "Contraseña incorrecta"
+          : formatError(err);
+        $("#login-error").textContent = msg;
+        show($("#login-error"));
+      }
+    });
   });
 
   // --- Tabs ---
@@ -320,7 +491,7 @@
   });
 
   // --- Estado ---
-  $("#btn-refresh-dashboard").addEventListener("click", () => refreshDashboard());
+  $("#btn-refresh-dashboard").addEventListener("click", () => runQueued(refreshDashboard));
 
   // --- WiFi ---
   $("#btn-wifi-scan").addEventListener("click", () => runQueued(async () => {
@@ -330,24 +501,17 @@
     meta.textContent = "Escaneando…";
     hide($("#wifi-result"));
     try {
-      toast("Escaneando WiFi (rescan en el Pi, ~3–5 s mínimo)…");
-      const res = await withScanMinWait(
-        apiCommand("wifi_scan", { rescan: true }, TIMEOUT.wifiScan),
-      );
-      const networks = res.data?.networks || [];
-      const select = $("#wifi-ssid");
-      select.innerHTML = '<option value="">— Selecciona red —</option>';
-      networks.forEach((n) => {
-        const opt = document.createElement("option");
-        opt.value = n.ssid;
-        const sig = n.signal != null ? ` (${n.signal} dBm)` : "";
-        opt.textContent = `${n.ssid}${sig}`;
-        select.appendChild(opt);
-      });
+      toast("Escaneando WiFi en el Pi…");
+      const { networks, scanMode } = await withScanMinWait(performWifiScan());
+      fillWifiSelect(networks);
       meta.textContent = networks.length
-        ? `${networks.length} red(es) encontrada(s). ${formatScanMode(res.data?.scan_mode)}`
+        ? `${networks.length} red(es). ${formatScanMode(scanMode)}`
         : "No se encontraron redes.";
-      toast(`${networks.length} red(es) encontrada(s).`);
+      if (networks.length <= 1) {
+        toast("Pocas redes detectadas. Acerca la tablet al router o reintenta.");
+      } else {
+        toast(`${networks.length} redes encontradas.`);
+      }
     } catch (e) {
       meta.textContent = "";
       setBanner(formatError(e));
@@ -405,8 +569,8 @@
       const saved = devRes.data?.device_path || devRes.data?.active_device || "";
       fillCameraSelect(cameras, saved);
       renderCameraMeta([
-        ["Cámaras detectadas", String(cameras.length)],
-        ["Guardada en Pi", saved || NA],
+        ["Cámaras", String(cameras.length)],
+        ["Guardada", saved || NA],
       ]);
       toast(`${cameras.length} cámara(s) listada(s).`);
     } catch (e) {
@@ -419,7 +583,7 @@
     if (!device) { toast("Selecciona una cámara."); return; }
     try {
       await apiCommand("camera_set_device", { device });
-      toast("Cámara guardada en el Pi.");
+      toast("Cámara guardada.");
       await refreshDashboard();
     } catch (e) {
       setBanner(formatError(e));
@@ -429,6 +593,7 @@
   $("#btn-camera-capture").addEventListener("click", () => runQueued(async () => {
     const device = $("#camera-select").value;
     if (!device) { toast("Selecciona una cámara."); return; }
+    resetCameraPreview();
     try {
       toast("Capturando foto…");
       const res = await apiCommand(
@@ -437,33 +602,41 @@
         TIMEOUT.wifiConnect,
       );
       const data = res.data || {};
-      const img = $("#camera-image");
-      const ph = $("#camera-placeholder");
-      if (data.mode === "base64" && data.image_base64) {
-        img.src = `data:image/jpeg;base64,${data.image_base64}`;
-        show(img);
-        hide(ph);
-      } else if (data.mode === "chunked") {
-        toast("Imagen grande — modo chunked; implementa chunks si hace falta.");
-      }
+      await displayCaptureResult(data);
+
       const cam = (dashboard?.camera?.cameras || []).find((c) => c.path === device) || {};
       renderCameraMeta([
         ["Cámara", cam.name || NA],
         ["Dispositivo", data.device_path || device],
         ["Driver", cam.driver || NA],
-        ["Bus", cam.bus_info || NA],
         ["Resolución", data.resolution || (data.width && data.height ? `${data.width}×${data.height}` : NA)],
-        ["Tamaño", data.size_bytes != null ? `${data.size_bytes} B` : NA],
-        ["Backend", data.backend || NA],
+        ["Tamaño", data.size_bytes != null ? `${(data.size_bytes / 1024).toFixed(1)} KB` : NA],
         ["Modo", data.mode || NA],
       ]);
-      toast("Foto de prueba capturada.");
+      toast("Foto capturada.");
     } catch (e) {
+      resetCameraPreview();
       setBanner(formatError(e));
     }
   }));
 
   // --- CardMed ---
+  $("#btn-capture-interval-save").addEventListener("click", () => runQueued(async () => {
+    const raw = $("#capture-interval").value.trim();
+    const interval = parseInt(raw, 10);
+    if (!interval || interval < 1) {
+      toast("Introduce un intervalo válido (≥ 1 s).");
+      return;
+    }
+    try {
+      await apiCommand("sampling_set_interval", { interval_seconds: interval });
+      toast(`Intervalo guardado: ${interval} s.`);
+      await refreshDashboard();
+    } catch (e) {
+      setBanner(formatError(e));
+    }
+  }));
+
   $("#btn-cardmed-get").addEventListener("click", () => runQueued(async () => {
     try {
       const res = await apiCommand("cardmed_get", {});
@@ -524,17 +697,11 @@
       const pre = $("#cardmed-test-result");
       pre.textContent = JSON.stringify(data, null, 2);
       show(pre);
-      toast("Prueba CardMed completada.");
+      toast("Prueba completada.");
     } catch (e) {
       setBanner(formatError(e));
     }
   }));
-
-  // --- Header / done ---
-  $("#btn-finish").addEventListener("click", () => showView("done"));
-  $("#btn-continue").addEventListener("click", () => showView("main"));
-  $("#btn-close").addEventListener("click", () => window.close());
-  $("#btn-close-done").addEventListener("click", () => window.close());
 
   bindPasswordToggle("#login-password", "#login-toggle-pw");
   bindPasswordToggle("#wifi-password", "#wifi-toggle-pw");
@@ -542,6 +709,7 @@
   // Init
   loadDeviceInfo();
   buildStatusCards(null);
+  resetCameraPreview();
   if (token) {
     setAuthenticated(true);
   } else {

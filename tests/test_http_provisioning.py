@@ -99,7 +99,7 @@ def test_provisioning_gui_index():
         response = conn.getresponse()
         body = response.read().decode("utf-8")
         assert response.status == 200
-        assert "Configuración Nilocardmed" in body
+        assert "NiloCardmed" in body
         assert "/assets/app.js" in body
 
         conn = HTTPConnection("127.0.0.1", port, timeout=5)

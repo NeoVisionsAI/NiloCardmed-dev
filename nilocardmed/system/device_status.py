@@ -14,6 +14,7 @@ from nilocardmed.config.manager import ConfigManager
 from nilocardmed.sampler.window import evaluate_window
 from nilocardmed.storage.manager import StorageManager
 from nilocardmed.system.power import collect_battery_status
+from nilocardmed.system.thermal import collect_cpu_temperature
 from nilocardmed.telemetry.store import telemetry
 from nilocardmed.wifi.exceptions import WifiError
 from nilocardmed.wifi.service import WifiService
@@ -118,6 +119,7 @@ def build_device_status(ctx: CommandContext) -> dict[str, Any]:
         "version": __version__,
         "wifi": wifi,
         "power": collect_battery_status(),
+        "system": collect_cpu_temperature(),
         "sampling": sampling,
         "camera": camera_status(ctx),
         "captures": capture_statistics(ctx),

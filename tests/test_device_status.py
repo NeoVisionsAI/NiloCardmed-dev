@@ -26,4 +26,5 @@ def test_build_device_status_includes_window_phase(tmp_path):
     assert status["sampling"]["window_phase"] in {"unlimited", "active", "before_start", "after_end"}
     assert "refreshed_at" in status
     assert "power" in status
+    assert "system" in status
     assert "camera" in status

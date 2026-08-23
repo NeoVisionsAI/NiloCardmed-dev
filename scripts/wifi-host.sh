@@ -233,24 +233,40 @@ def merge_network_lists(*lists: list[dict]) -> list[dict]:
     return sorted(merged.values(), key=lambda item: item.get("signal") or 0, reverse=True)
 
 
-def iw_scan_networks(*, wait_seconds: float | None = None) -> list[dict]:
-    """Escaneo con iw (necesario en Pi AP+STA: nmcli a menudo solo lista la red conectada)."""
+def iw_command(*args: str) -> list[str]:
     iw = iw_binary()
     if not iw:
+        return []
+    base = [iw, *args]
+    if os.geteuid() == 0:
+        return base
+    sudo = shutil.which("sudo")
+    if sudo and os.environ.get("WIFI_IW_SUDO", "1").lower() not in ("0", "false", "no"):
+        return [sudo, "-n", iw, *args]
+    return base
+
+
+def iw_scan_networks(*, wait_seconds: float | None = None) -> list[dict]:
+    """Escaneo con iw (necesario en Pi AP+STA: nmcli a menudo solo lista la red conectada)."""
+    cmd_prefix = iw_command("dev", INTERFACE, "scan", "trigger")
+    if not cmd_prefix:
         return []
 
     wait = wait_seconds if wait_seconds is not None else max(SCAN_WAIT_SECONDS, 2.0)
 
     try:
         subprocess.run(
-            [iw, "dev", INTERFACE, "scan", "trigger"],
+            cmd_prefix,
             check=False,
             capture_output=True,
             timeout=8,
         )
         time.sleep(wait)
+        dump_cmd = iw_command("dev", INTERFACE, "scan", "dump")
+        if not dump_cmd:
+            return []
         result = subprocess.run(
-            [iw, "dev", INTERFACE, "scan", "dump"],
+            dump_cmd,
             capture_output=True,
             text=True,
             timeout=20,
@@ -321,7 +337,7 @@ def scan() -> dict:
     if ap_concurrent:
         scan_mode = f"{scan_mode}+ap_concurrent"
 
-    scan_wait = max(SCAN_WAIT_SECONDS, 4.0) if ap_concurrent else SCAN_WAIT_SECONDS
+    scan_wait = max(SCAN_WAIT_SECONDS, 5.0) if ap_concurrent else SCAN_WAIT_SECONDS
     iw_networks: list[dict] = []
 
     # Con uap0 activo, nmcli suele devolver solo la BSS conectada — iw primero.
@@ -330,7 +346,7 @@ def scan() -> dict:
 
     if force_rescan and not cached_only:
         subprocess.run(
-            ["nmcli", "dev", "wifi", "rescan", "ifname", INTERFACE],
+            nmcli_command("dev", "wifi", "rescan", "ifname", INTERFACE),
             check=False,
             capture_output=True,
         )
@@ -364,14 +380,18 @@ def scan() -> dict:
             scan_mode = f"{scan_mode}+nmcli_all"
 
     if not iw_networks and (ap_concurrent or len(ordered) <= 1):
-        iw_networks = iw_scan_networks(wait_seconds=scan_wait)
+        iw_networks = iw_scan_networks(wait_seconds=max(scan_wait, 3.0))
 
     if iw_networks:
         ordered = merge_network_lists(ordered, iw_networks)
         scan_mode = f"{scan_mode}+iw"
 
-    if ap_concurrent and len(ordered) <= 1:
-        scan_mode = f"{scan_mode}+iw_missing"
+    if len(ordered) <= 1 and not cached_only:
+        # Último intento: rescan iw tras pausa extra (AP+STA tarda en estabilizar).
+        extra = iw_scan_networks(wait_seconds=max(scan_wait, 4.0))
+        if extra:
+            ordered = merge_network_lists(ordered, extra)
+            scan_mode = f"{scan_mode}+iw_retry"
 
     restored = False
     if snapshot:
