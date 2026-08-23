@@ -34,11 +34,26 @@ log_info "Generando ${override_file}"
 devices=()
 volumes=()
 extra_group_gids=()
+device_cgroup_rules=()
 camera_hotplug=false
 
 if is_true "${ENABLE_CAMERA_HOTPLUG:-true}"; then
   camera_hotplug=true
   log_info "Cámara USB hot-plug: /dev del host (conectar/desconectar sin reiniciar el contenedor)"
+  # Montar /dev no basta: Docker bloquea ioctl/open salvo reglas cgroup (EPERM en v4l2).
+  video_major=81
+  if [[ -e /dev/video0 ]]; then
+    video_major=$((0x$(stat -c '%t' /dev/video0)))
+  fi
+  device_cgroup_rules+=("c ${video_major}:* rmw")
+  media_major=249
+  for media_node in /dev/media*; do
+    [[ -e "${media_node}" ]] || continue
+    media_major=$((0x$(stat -c '%t' "${media_node}")))
+    break
+  done
+  device_cgroup_rules+=("c ${media_major}:* rmw")
+  log_info "Contenedor: device_cgroup_rules → video ${video_major}, media ${media_major}"
 else
   video_host=""
   video_container=""
@@ -145,6 +160,13 @@ fi
 
   if is_true "${PRIVILEGED_MODE:-false}"; then
     echo "    privileged: true"
+  fi
+
+  if ((${#device_cgroup_rules[@]} > 0)); then
+    echo "    device_cgroup_rules:"
+    for rule in "${device_cgroup_rules[@]}"; do
+      echo "      - '${rule}'"
+    done
   fi
 
   if ((${#extra_group_gids[@]} > 0)); then
