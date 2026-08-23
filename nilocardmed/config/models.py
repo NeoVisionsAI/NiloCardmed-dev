@@ -237,8 +237,8 @@ class BluetoothSettings(BaseModel):
     max_image_response_bytes: int = Field(
         default=32768,
         ge=1024,
-        le=262144,
-        description="Límite para camera_capture_test en mode=base64",
+        le=1048576,
+        description="Límite para camera_capture_test en mode=base64 (WiFi AP: usar ≥512KB)",
     )
     max_chunk_response_bytes: int = Field(
         default=4096,

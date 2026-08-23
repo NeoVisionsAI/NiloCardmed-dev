@@ -168,10 +168,19 @@ def handle_camera_capture_test(ctx: CommandContext, request: CommandRequest) -> 
         }
 
     if len(image_data) > ctx.settings.max_image_response_bytes:
-        raise BluetoothCommandError(
-            "response_too_large",
-            f"Imagen {result.size_bytes}B; usa mode=chunked o mode=path",
+        logger.info(
+            "Imagen %s B > límite base64 (%s B); devolviendo modo chunked",
+            result.size_bytes,
+            ctx.settings.max_image_response_bytes,
         )
+        meta = cached.metadata()
+        meta["mode"] = "chunked"
+        meta["backend"] = result.backend
+        meta["hint"] = (
+            "Imagen demasiado grande para base64; usa camera_capture_chunk "
+            "o aumenta NILOCARDMED_BLUETOOTH__MAX_IMAGE_RESPONSE_BYTES"
+        )
+        return meta
 
     return {
         "mode": "base64",

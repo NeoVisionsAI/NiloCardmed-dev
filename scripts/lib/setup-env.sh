@@ -356,6 +356,8 @@ ensure_app_production_flags() {
   update_env_file "${env_file}" "NILOCARDMED_WIFI__ENABLED" "true"
   update_env_file "${env_file}" "NILOCARDMED_HTTP__ENABLED" "true"
   update_env_file "${env_file}" "NILOCARDMED_HTTP__BIND_AP_ONLY" "false"
+  update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__CAPTURE_TEST_MODE" "base64"
+  update_env_file "${env_file}" "NILOCARDMED_BLUETOOTH__MAX_IMAGE_RESPONSE_BYTES" "524288"
   log_info ".env: WiFi + HTTP local habilitados; BLE desactivado (código conservado)"
 }
 
