@@ -46,6 +46,7 @@ class CameraService:
             v4l2_ctl_binary=self.settings.v4l2_ctl_binary,
             discovery_timeout_seconds=self.settings.discovery_timeout_seconds,
             include_non_capture=include,
+            physical_cameras_only=self.settings.physical_cameras_only,
         )
 
     def capture(

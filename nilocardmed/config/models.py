@@ -487,6 +487,10 @@ class CameraSettings(BaseModel):
     backend: Literal["auto", "fswebcam", "ffmpeg"] = "auto"
     device_glob: str = "/dev/video*"
     include_non_capture: bool = False
+    physical_cameras_only: bool = Field(
+        default=True,
+        description="Excluir nodos V4L2 internos del SoC (p. ej. bcm2835-codec/isp en Raspberry Pi)",
+    )
     width: int = Field(default=1280, ge=160, le=7680)
     height: int = Field(default=720, ge=120, le=4320)
     jpeg_quality: int = Field(default=85, ge=1, le=100)
