@@ -72,6 +72,10 @@ if is_true "${ENABLE_WIFI:-false}"; then
       volumes+=("/usr/sbin/iw:/usr/sbin/iw:ro")
       log_info "Contenedor: iw del host montado (/usr/sbin/iw)"
     fi
+    if [[ -x /usr/sbin/ip ]]; then
+      volumes+=("/usr/sbin/ip:/usr/sbin/ip:ro")
+      log_info "Contenedor: ip del host montado (/usr/sbin/ip)"
+    fi
     if netdev_gid="$(resolve_host_group_gid netdev 2>/dev/null)"; then
       extra_group_gids+=("${netdev_gid}")
       log_info "Contenedor: grupo netdev → GID ${netdev_gid} (NetworkManager)"

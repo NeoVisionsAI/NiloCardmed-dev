@@ -147,8 +147,31 @@ def iw_binary() -> str | None:
 
 def ap_interface_up() -> bool:
     """True si uap0 existe (AP+STA concurrente — nmcli suele devolver solo la red activa)."""
+    ap_if = os.environ.get("WIFI_AP_INTERFACE", "uap0")
+    # sysfs: no depende de `ip` (slim Docker puede no tener iproute2)
+    if os.path.isdir(f"/sys/class/net/{ap_if}"):
+        operstate_path = f"/sys/class/net/{ap_if}/operstate"
+        if os.path.isfile(operstate_path):
+            try:
+                with open(operstate_path, encoding="utf-8") as handle:
+                    state = handle.read().strip().lower()
+                if state in {"up", "unknown", "dormant"}:
+                    return True
+            except OSError:
+                pass
+        return True
+
+    ip_bin = (
+        os.environ.get("WIFI_IP_BINARY")
+        or shutil.which("ip")
+        or ("/usr/sbin/ip" if os.path.isfile("/usr/sbin/ip") else None)
+        or ("/sbin/ip" if os.path.isfile("/sbin/ip") else None)
+    )
+    if not ip_bin:
+        return False
+
     result = subprocess.run(
-        ["ip", "link", "show", "uap0"],
+        [ip_bin, "link", "show", ap_if],
         capture_output=True,
         text=True,
         timeout=3,
