@@ -68,6 +68,10 @@ if is_true "${ENABLE_WIFI:-false}"; then
     volumes+=("${wifi_script_host}:${wifi_script_container}:ro")
     dbus_path="${WIFI_DBUS_SYSTEM_PATH:-/var/run/dbus/system_bus_socket}"
     volumes+=("${dbus_path}:/var/run/dbus/system_bus_socket:ro")
+    if [[ -x /usr/sbin/iw ]]; then
+      volumes+=("/usr/sbin/iw:/usr/sbin/iw:ro")
+      log_info "Contenedor: iw del host montado (/usr/sbin/iw)"
+    fi
     if netdev_gid="$(resolve_host_group_gid netdev 2>/dev/null)"; then
       extra_group_gids+=("${netdev_gid}")
       log_info "Contenedor: grupo netdev → GID ${netdev_gid} (NetworkManager)"

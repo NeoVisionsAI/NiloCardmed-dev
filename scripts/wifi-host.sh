@@ -133,23 +133,74 @@ def _dbm_to_signal_percent(dbm: int | float | None) -> int | None:
     return max(0, min(100, int(2 * (value + 100))))
 
 
-def iw_scan_networks() -> list[dict]:
-    """Escaneo alternativo con iw (útil en Pi AP+STA cuando nmcli solo devuelve la red activa)."""
-    if shutil.which("iw") is None:
-        return []
+def iw_binary() -> str | None:
+    for candidate in (
+        os.environ.get("WIFI_IW_BINARY"),
+        shutil.which("iw"),
+        "/usr/sbin/iw",
+        "/sbin/iw",
+    ):
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
-    subprocess.run(
-        ["iw", "dev", INTERFACE, "scan", "trigger"],
-        check=False,
-        capture_output=True,
-        timeout=5,
-    )
-    time.sleep(max(SCAN_WAIT_SECONDS, 2.0))
+
+def ap_interface_up() -> bool:
+    """True si uap0 existe (AP+STA concurrente — nmcli suele devolver solo la red activa)."""
     result = subprocess.run(
-        ["iw", "dev", INTERFACE, "scan", "dump"],
+        ["ip", "link", "show", "uap0"],
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=3,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    text = result.stdout
+    return "state UP" in text or "LOWER_UP" in text
+
+
+def merge_network_lists(*lists: list[dict]) -> list[dict]:
+    merged: dict[str, dict] = {}
+    for networks in lists:
+        for item in networks:
+            ssid = item.get("ssid")
+            if not ssid:
+                continue
+            if ssid not in merged:
+                merged[ssid] = dict(item)
+                continue
+            existing = merged[ssid]
+            if (item.get("signal") or 0) > (existing.get("signal") or 0):
+                existing["signal"] = item["signal"]
+            for key in ("security", "bssid", "frequency_mhz"):
+                if item.get(key) and (not existing.get(key) or existing.get(key) == "UNKNOWN"):
+                    existing[key] = item[key]
+            if item.get("in_use"):
+                existing["in_use"] = True
+    return sorted(merged.values(), key=lambda item: item.get("signal") or 0, reverse=True)
+
+
+def iw_scan_networks(*, wait_seconds: float | None = None) -> list[dict]:
+    """Escaneo con iw (necesario en Pi AP+STA: nmcli a menudo solo lista la red conectada)."""
+    iw = iw_binary()
+    if not iw:
+        return []
+
+    wait = wait_seconds if wait_seconds is not None else max(SCAN_WAIT_SECONDS, 2.0)
+
+    subprocess.run(
+        [iw, "dev", INTERFACE, "scan", "trigger"],
+        check=False,
+        capture_output=True,
+        timeout=8,
+    )
+    time.sleep(wait)
+    result = subprocess.run(
+        [iw, "dev", INTERFACE, "scan", "dump"],
+        capture_output=True,
+        text=True,
+        timeout=20,
         check=False,
     )
     if result.returncode != 0:
@@ -157,10 +208,23 @@ def iw_scan_networks() -> list[dict]:
 
     networks: dict[str, dict] = {}
     current_signal_dbm: int | None = None
+    current_freq: int | None = None
+    current_bssid: str | None = None
     for line in result.stdout.splitlines():
         stripped = line.strip()
         if stripped.startswith("BSS "):
             current_signal_dbm = None
+            current_freq = None
+            current_bssid = None
+            parts = stripped.split("(", 1)
+            if parts:
+                mac = parts[0].replace("BSS ", "").strip()
+                current_bssid = mac if mac else None
+            if len(parts) > 1 and "MHz" in parts[1]:
+                try:
+                    current_freq = int(parts[1].split("MHz")[0].split()[-1])
+                except ValueError:
+                    current_freq = None
         elif stripped.startswith("signal:"):
             try:
                 current_signal_dbm = int(float(stripped.split("signal:")[1].split()[0]))
@@ -168,16 +232,19 @@ def iw_scan_networks() -> list[dict]:
                 current_signal_dbm = None
         elif stripped.startswith("SSID:"):
             ssid = stripped.split("SSID:", 1)[1].strip()
-            if not ssid or ssid in networks:
+            if not ssid:
                 continue
-            networks[ssid] = {
-                "ssid": ssid,
-                "signal": _dbm_to_signal_percent(current_signal_dbm),
-                "security": "UNKNOWN",
-                "bssid": None,
-                "frequency_mhz": None,
-                "in_use": False,
-            }
+            entry = networks.get(ssid)
+            signal = _dbm_to_signal_percent(current_signal_dbm)
+            if entry is None or (signal or 0) > (entry.get("signal") or 0):
+                networks[ssid] = {
+                    "ssid": ssid,
+                    "signal": signal,
+                    "security": "UNKNOWN",
+                    "bssid": current_bssid,
+                    "frequency_mhz": current_freq,
+                    "in_use": False,
+                }
 
     return sorted(networks.values(), key=lambda item: item.get("signal") or 0, reverse=True)
 
@@ -186,6 +253,7 @@ def scan() -> dict:
     snapshot = connection_snapshot()
     force_rescan = os.environ.get("WIFI_FORCE_RESCAN", "1").lower() not in ("0", "false", "no")
     cached_only = os.environ.get("WIFI_SCAN_CACHED_ONLY", "").lower() in ("1", "true", "yes")
+    ap_concurrent = ap_interface_up()
 
     if cached_only:
         scan_mode = "cached"
@@ -194,13 +262,23 @@ def scan() -> dict:
     else:
         scan_mode = "rescan"
 
+    if ap_concurrent:
+        scan_mode = f"{scan_mode}+ap_concurrent"
+
+    scan_wait = max(SCAN_WAIT_SECONDS, 4.0) if ap_concurrent else SCAN_WAIT_SECONDS
+    iw_networks: list[dict] = []
+
+    # Con uap0 activo, nmcli suele devolver solo la BSS conectada — iw primero.
+    if not cached_only and (ap_concurrent or force_rescan):
+        iw_networks = iw_scan_networks(wait_seconds=scan_wait)
+
     if force_rescan and not cached_only:
         subprocess.run(
             ["nmcli", "dev", "wifi", "rescan", "ifname", INTERFACE],
             check=False,
             capture_output=True,
         )
-        time.sleep(SCAN_WAIT_SECONDS)
+        time.sleep(scan_wait)
 
     output = run_nmcli(
         "-t",
@@ -229,14 +307,15 @@ def scan() -> dict:
             ordered = ordered_all
             scan_mode = f"{scan_mode}+nmcli_all"
 
-    if len(ordered) <= 1:
-        iw_networks = iw_scan_networks()
-        if len(iw_networks) > len(ordered):
-            merged = {item["ssid"]: item for item in ordered}
-            for item in iw_networks:
-                merged.setdefault(item["ssid"], item)
-            ordered = sorted(merged.values(), key=lambda item: item.get("signal") or 0, reverse=True)
-            scan_mode = f"{scan_mode}+iw_fallback"
+    if not iw_networks and (ap_concurrent or len(ordered) <= 1):
+        iw_networks = iw_scan_networks(wait_seconds=scan_wait)
+
+    if iw_networks:
+        ordered = merge_network_lists(ordered, iw_networks)
+        scan_mode = f"{scan_mode}+iw"
+
+    if ap_concurrent and len(ordered) <= 1:
+        scan_mode = f"{scan_mode}+iw_missing"
 
     restored = False
     if snapshot:
