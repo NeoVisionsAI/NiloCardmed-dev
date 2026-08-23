@@ -100,7 +100,8 @@ ENV APP_UID=${APP_UID} \
 USER root
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD gosu "${APP_UID}:${APP_GID}" python -m nilocardmed.main health check --exit-code || exit 1
+    CMD setpriv --reuid="${APP_UID}" --regid="${APP_GID}" --keep-groups \
+        python -m nilocardmed.main health check --exit-code || exit 1
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["python", "-m", "nilocardmed.main"]
