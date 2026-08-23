@@ -12,7 +12,8 @@ SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 CMD="${1:-}"
 if [[ "${CMD}" =~ ^(connect|disconnect|restore)$ ]] && [[ "$(id -u)" -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1; then
-    exec sudo -n -E "${SELF}" "$@"
+    # Sin -E: sudoers usa env_keep para WIFI_* (evita "not allowed to preserve the environment").
+    exec sudo -n "${SELF}" "$@"
   fi
 fi
 

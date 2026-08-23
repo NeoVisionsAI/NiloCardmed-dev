@@ -55,16 +55,20 @@ if command -v sudo >/dev/null 2>&1; then
   cat >"${sudoers_file}" <<EOF
 # NiloCardmed — wifi-host.sh como root (contenedor Docker + pruebas en host)
 Defaults:%netdev !requiretty
+Defaults:%netdev env_keep += "WIFI_INTERFACE WIFI_PASSWORD WIFI_CONNECT_TIMEOUT WIFI_SCAN_TIMEOUT WIFI_SCAN_WAIT_SECONDS WIFI_SNAPSHOT WIFI_FORCE_RESCAN WIFI_NMCLI_SUDO"
 %netdev ALL=(root) NOPASSWD: ${WIFI_SCRIPT}, ${WIFI_SCRIPT_CONTAINER}
 EOF
   if [[ -n "${RUN_USER}" ]]; then
     cat >>"${sudoers_file}" <<EOF
 Defaults:${RUN_USER} !requiretty
+Defaults:${RUN_USER} env_keep += "WIFI_INTERFACE WIFI_PASSWORD WIFI_CONNECT_TIMEOUT WIFI_SCAN_TIMEOUT WIFI_SCAN_WAIT_SECONDS WIFI_SNAPSHOT WIFI_FORCE_RESCAN WIFI_NMCLI_SUDO"
 ${RUN_USER} ALL=(root) NOPASSWD: ${WIFI_SCRIPT}, ${WIFI_SCRIPT_CONTAINER}
 EOF
   fi
   cat >>"${sudoers_file}" <<EOF
 # Usuario del contenedor (uid ${APP_UID}, nombre distinto al del host)
+Defaults:nilocardmed !requiretty
+Defaults:nilocardmed env_keep += "WIFI_INTERFACE WIFI_PASSWORD WIFI_CONNECT_TIMEOUT WIFI_SCAN_TIMEOUT WIFI_SCAN_WAIT_SECONDS WIFI_SNAPSHOT WIFI_FORCE_RESCAN WIFI_NMCLI_SUDO"
 nilocardmed ALL=(root) NOPASSWD: ${WIFI_SCRIPT}, ${WIFI_SCRIPT_CONTAINER}
 EOF
   chmod 440 "${sudoers_file}"
