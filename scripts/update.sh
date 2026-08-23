@@ -29,6 +29,8 @@ Uso: sudo ./scripts/update.sh [--build]
     - chmod +x en scripts/
     - paquetes WiFi AP si faltan: hostapd, dnsmasq, udhcpd, iw
     - contraseña WPA (NILOCARDMED_CONNECTION_PASSWORD, ≥8 chars)
+    - permisos NetworkManager (polkit + sudoers) para wifi_connect
+    - docker-compose.override.yml (script WiFi, D-Bus, sudoers, netdev)
     - systemd nilocardmed-wifi-ap + repair-dhcp (udhcpd/dnsmasq)
     - reinicio contenedor Docker + AP WiFi
 

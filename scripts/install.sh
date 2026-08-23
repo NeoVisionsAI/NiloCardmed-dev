@@ -115,6 +115,9 @@ else
   ensure_host_memory_optimize "${INSTALL_DIR}"
 fi
 
+# --- 5.5 Permisos NetworkManager (antes del compose override → monta sudoers en Docker) ---
+ensure_wifi_nm_permissions "${INSTALL_DIR}"
+
 # --- 6. Compose override (hot-plug cámara, BLE, WiFi) ---
 INSTALL_DIR="${INSTALL_DIR}" DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE}" \
   bash "${INSTALL_DIR}/scripts/generate-compose-override.sh"
@@ -170,7 +173,6 @@ run_compose_in_install_dir down --remove-orphans 2>/dev/null || true
 
 ensure_bluetooth_host_ready "${INSTALL_DIR}"
 ensure_wifi_ap_host_ready "${INSTALL_DIR}"
-ensure_wifi_nm_permissions "${INSTALL_DIR}"
 ensure_bluetooth_disabled_for_wifi_ap "${INSTALL_DIR}"
 
 log_info "=== Reinicio del servicio ${NILOCARDMED_SERVICE_NAME} ==="
