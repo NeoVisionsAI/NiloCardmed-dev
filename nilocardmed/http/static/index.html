@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1a5fb4">
+  <title>NiloCardmed — Configuración</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="header">
+      <div class="header__left">
+        <button type="button" id="btn-close" class="btn-icon" title="Cerrar" aria-label="Cerrar ventana">←</button>
+        <div>
+          <h1 class="header__title">Configuración Nilocardmed</h1>
+          <p id="header-subtitle" class="header__subtitle">—</p>
+        </div>
+      </div>
+      <button type="button" id="btn-finish" class="btn btn--primary btn--sm">Finalizar</button>
+    </header>
+
+    <div id="toast" class="toast" hidden></div>
+    <div id="banner-error" class="alert alert--error" hidden></div>
+
+    <!-- Login -->
+    <section id="view-login" class="view">
+      <div class="panel panel--login">
+        <div class="login-head">
+          <span class="icon-lock" aria-hidden="true"></span>
+          <div>
+            <h2>Acceso al dispositivo</h2>
+            <p id="login-subtitle" class="hint">—</p>
+          </div>
+        </div>
+        <p class="hint login-hint">Usa la misma contraseña que la red WiFi del Pi.</p>
+        <form id="form-login" class="login-row" autocomplete="off">
+          <label class="sr-only" for="login-password">Contraseña</label>
+          <div class="input-wrap">
+            <input id="login-password" type="password" required>
+            <button type="button" id="login-toggle-pw" class="btn-icon btn-eye" aria-label="Mostrar contraseña"></button>
+          </div>
+          <button type="submit" class="btn btn--primary" id="btn-login">Entrar</button>
+        </form>
+        <p id="login-error" class="field-error" hidden></p>
+      </div>
+    </section>
+
+    <!-- Main tabs -->
+    <section id="view-main" class="view" hidden>
+      <nav class="tabs" role="tablist">
+        <button type="button" class="tab tab--active" data-tab="status" role="tab">Estado</button>
+        <button type="button" class="tab" data-tab="wifi" role="tab">WiFi</button>
+        <button type="button" class="tab" data-tab="camera" role="tab">Cámara</button>
+        <button type="button" class="tab" data-tab="cardmed" role="tab">CardMed</button>
+      </nav>
+
+      <!-- Estado -->
+      <div id="panel-status" class="panel tab-panel" role="tabpanel">
+        <div class="toolbar">
+          <button type="button" id="btn-refresh-dashboard" class="btn btn--primary">↻ Refrescar</button>
+          <span id="dashboard-meta" class="hint">Sin datos cargados — pulsa Refrescar</span>
+        </div>
+        <div id="status-cards" class="card-grid"></div>
+      </div>
+
+      <!-- WiFi -->
+      <div id="panel-wifi" class="panel tab-panel" hidden role="tabpanel">
+        <div class="toolbar">
+          <button type="button" id="btn-wifi-scan" class="btn btn--primary btn--scan">Escanear redes</button>
+          <span id="wifi-scan-meta" class="hint"></span>
+        </div>
+        <p id="wifi-scan-hint" class="hint" hidden>El rescan en el Pi puede tardar unos segundos…</p>
+        <div class="wifi-connect-row">
+          <select id="wifi-ssid" class="input-select" aria-label="SSID">
+            <option value="">— Selecciona red —</option>
+          </select>
+          <div class="input-wrap input-wrap--flex">
+            <input id="wifi-password" type="password" placeholder="Contraseña WiFi" autocomplete="off">
+            <button type="button" id="wifi-toggle-pw" class="btn-icon btn-eye" aria-label="Mostrar contraseña"></button>
+          </div>
+          <button type="button" id="btn-wifi-connect" class="btn btn--primary">Conectar</button>
+        </div>
+        <pre id="wifi-result" class="json-pre" hidden></pre>
+      </div>
+
+      <!-- Cámara -->
+      <div id="panel-camera" class="panel tab-panel" hidden role="tabpanel">
+        <div class="camera-toolbar">
+          <button type="button" id="btn-camera-list" class="btn btn--primary">Listar cámaras</button>
+          <button type="button" id="btn-camera-save" class="btn btn--secondary">Guardar selección</button>
+          <select id="camera-select" class="input-select input-select--cam" aria-label="Cámara">
+            <option value="">— Cámara —</option>
+          </select>
+          <button type="button" id="btn-camera-capture" class="btn btn--primary">Foto de prueba</button>
+        </div>
+        <div class="camera-grid">
+          <div class="camera-preview">
+            <p class="camera-preview__label">Imagen prueba</p>
+            <div id="camera-placeholder" class="camera-placeholder">
+              <span class="icon-image" aria-hidden="true"></span>
+              <p>La imagen de prueba aparecerá aquí</p>
+            </div>
+            <img id="camera-image" class="camera-image" alt="Captura de prueba" hidden>
+          </div>
+          <div class="camera-meta">
+            <p class="camera-preview__label">Metadatos</p>
+            <dl id="camera-meta-list" class="meta-list"></dl>
+          </div>
+        </div>
+      </div>
+
+      <!-- CardMed -->
+      <div id="panel-cardmed" class="panel tab-panel" hidden role="tabpanel">
+        <div class="toolbar toolbar--wrap">
+          <button type="button" id="btn-cardmed-get" class="btn btn--secondary">Leer config</button>
+          <button type="button" id="btn-cardmed-qr" class="btn btn--secondary">Escanear QR (Pi)</button>
+          <button type="button" id="btn-cardmed-test" class="btn btn--primary">Probar</button>
+        </div>
+        <div class="cardmed-block">
+          <label for="cardmed-code">Código manual <span class="hint">SITE|Sala|op|loc</span></label>
+          <div class="inline-row">
+            <input id="cardmed-code" type="text" class="input-text" autocomplete="off">
+            <button type="button" id="btn-cardmed-save-code" class="btn btn--secondary">Guardar</button>
+          </div>
+        </div>
+        <div class="cardmed-block">
+          <label for="cardmed-json">Config JSON</label>
+          <textarea id="cardmed-json" class="input-textarea" rows="5" placeholder='{"site_id":"..."}'></textarea>
+          <button type="button" id="btn-cardmed-save-json" class="btn btn--secondary">Guardar JSON</button>
+        </div>
+        <div class="cardmed-block">
+          <p class="camera-preview__label">Config cargada</p>
+          <pre id="cardmed-preview" class="json-pre">—</pre>
+        </div>
+        <div class="cardmed-block">
+          <p class="camera-preview__label">Resultado prueba</p>
+          <ol id="cardmed-steps" class="steps-list"></ol>
+          <pre id="cardmed-test-result" class="json-pre" hidden></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Done -->
+    <section id="view-done" class="view" hidden>
+      <div class="panel panel--done">
+        <span class="icon-check" aria-hidden="true"></span>
+        <h2>Configuración completada</h2>
+        <p>Vuelve a la WiFi con internet (oficina / MiniPC) para seguir usando NILO.</p>
+        <div class="done-actions">
+          <button type="button" id="btn-continue" class="btn btn--secondary">Seguir configurando</button>
+          <button type="button" id="btn-close-done" class="btn btn--primary">Cerrar ventana</button>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

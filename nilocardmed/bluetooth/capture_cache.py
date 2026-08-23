@@ -17,6 +17,14 @@ class CachedCapture:
     size_bytes: int
     data: bytes
     chunk_size: int
+    width: int = 0
+    height: int = 0
+
+    @property
+    def resolution(self) -> str:
+        if self.width > 0 and self.height > 0:
+            return f"{self.width}x{self.height}"
+        return ""
 
     @property
     def total_chunks(self) -> int:
@@ -40,7 +48,7 @@ class CachedCapture:
 
     def metadata(self) -> dict:
         digest = hashlib.sha256(self.data).hexdigest()
-        return {
+        payload = {
             "capture_id": self.capture_id,
             "device_path": self.device_path,
             "capture_path": self.capture_path,
@@ -49,6 +57,11 @@ class CachedCapture:
             "chunk_size": self.chunk_size,
             "total_chunks": self.total_chunks,
         }
+        if self.width > 0 and self.height > 0:
+            payload["width"] = self.width
+            payload["height"] = self.height
+            payload["resolution"] = self.resolution
+        return payload
 
 
 class CaptureCache:

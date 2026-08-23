@@ -96,6 +96,17 @@ def _camera_device_to_dict(device) -> dict[str, Any]:
     }
 
 
+def _capture_dimensions(result) -> dict[str, Any]:
+    """Dimensiones reales del JPEG capturado (tras reescalado si aplica)."""
+    if result.width <= 0 or result.height <= 0:
+        return {}
+    return {
+        "width": result.width,
+        "height": result.height,
+        "resolution": f"{result.width}x{result.height}",
+    }
+
+
 def handle_camera_list(ctx: CommandContext, request: CommandRequest) -> dict[str, Any]:
     config = ctx.config_manager.get()
     include = request.payload.get("include_non_capture", False)
@@ -148,8 +159,11 @@ def handle_camera_capture_test(ctx: CommandContext, request: CommandRequest) -> 
         size_bytes=result.size_bytes,
         data=image_data,
         chunk_size=ctx.settings.capture_chunk_size,
+        width=result.width,
+        height=result.height,
     )
     ctx.capture_cache.store(cached)
+    dimensions = _capture_dimensions(result)
 
     if mode == "chunked":
         meta = cached.metadata()
@@ -165,6 +179,7 @@ def handle_camera_capture_test(ctx: CommandContext, request: CommandRequest) -> 
             "capture_path": str(result.output_path),
             "size_bytes": result.size_bytes,
             "backend": result.backend,
+            **dimensions,
         }
 
     if len(image_data) > ctx.settings.max_image_response_bytes:
@@ -189,6 +204,7 @@ def handle_camera_capture_test(ctx: CommandContext, request: CommandRequest) -> 
         "size_bytes": result.size_bytes,
         "backend": result.backend,
         "image_base64": base64.b64encode(image_data).decode("ascii"),
+        **dimensions,
     }
 
 

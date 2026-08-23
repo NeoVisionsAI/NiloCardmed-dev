@@ -90,3 +90,22 @@ def test_cors_preflight():
         assert response.getheader("Access-Control-Allow-Origin") == "*"
 
     _with_server(_run)
+
+
+def test_provisioning_gui_index():
+    def _run(port: int) -> None:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+        assert response.status == 200
+        assert "Configuración Nilocardmed" in body
+        assert "/assets/app.js" in body
+
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/assets/style.css")
+        css = conn.getresponse()
+        assert css.status == 200
+        assert "text/css" in (css.getheader("Content-Type") or "")
+
+    _with_server(_run)
