@@ -49,16 +49,27 @@ EOF
 chmod 644 "${polkit_rule}"
 log_info "Polkit: ${polkit_rule} (uid ${APP_UID})"
 
-if [[ -n "${RUN_USER}" ]] && command -v sudo >/dev/null 2>&1; then
+if command -v sudo >/dev/null 2>&1; then
   sudoers_file="/etc/sudoers.d/nilocardmed-wifi"
+  WIFI_SCRIPT_CONTAINER="/host/scripts/wifi-host.sh"
   cat >"${sudoers_file}" <<EOF
-# NiloCardmed — fallback nmcli WiFi (connect/disconnect) desde contenedor
+# NiloCardmed — wifi-host.sh como root (contenedor Docker + pruebas en host)
+Defaults:%netdev !requiretty
+%netdev ALL=(root) NOPASSWD: ${WIFI_SCRIPT}, ${WIFI_SCRIPT_CONTAINER}
+EOF
+  if [[ -n "${RUN_USER}" ]]; then
+    cat >>"${sudoers_file}" <<EOF
 Defaults:${RUN_USER} !requiretty
-${RUN_USER} ALL=(root) NOPASSWD: ${WIFI_SCRIPT}
+${RUN_USER} ALL=(root) NOPASSWD: ${WIFI_SCRIPT}, ${WIFI_SCRIPT_CONTAINER}
+EOF
+  fi
+  cat >>"${sudoers_file}" <<EOF
+# Usuario del contenedor (uid ${APP_UID}, nombre distinto al del host)
+nilocardmed ALL=(root) NOPASSWD: ${WIFI_SCRIPT}, ${WIFI_SCRIPT_CONTAINER}
 EOF
   chmod 440 "${sudoers_file}"
   if visudo -cf "${sudoers_file}" >/dev/null 2>&1; then
-    log_info "Sudoers: ${RUN_USER} → ${WIFI_SCRIPT}"
+    log_info "Sudoers: %netdev + nilocardmed → ${WIFI_SCRIPT}"
   else
     log_warn "Sudoers inválido — eliminando ${sudoers_file}"
     rm -f "${sudoers_file}"

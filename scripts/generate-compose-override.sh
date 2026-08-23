@@ -33,6 +33,7 @@ log_info "Generando ${override_file}"
 
 devices=()
 volumes=()
+extra_group_gids=()
 camera_hotplug=false
 
 if is_true "${ENABLE_CAMERA_HOTPLUG:-true}"; then
@@ -85,6 +86,10 @@ if is_true "${ENABLE_WIFI:-false}"; then
       extra_group_gids+=("${netdev_gid}")
       log_info "Contenedor: grupo netdev → GID ${netdev_gid} (NetworkManager)"
     fi
+    if [[ -f /etc/sudoers.d/nilocardmed-wifi ]]; then
+      volumes+=("/etc/sudoers.d/nilocardmed-wifi:/etc/sudoers.d/nilocardmed-wifi:ro")
+      log_info "Contenedor: sudoers WiFi montado"
+    fi
 fi
 
 # Código Python del host → contenedor (update.sh sin --build aplica cambios al reiniciar)
@@ -93,7 +98,6 @@ if [[ -d "${INSTALL_DIR}/nilocardmed" ]]; then
   log_info "Código Python montado desde ${INSTALL_DIR}/nilocardmed (live update)"
 fi
 
-extra_group_gids=()
 primary_group="${CONTAINER_GROUP_ADD:-video}"
 primary_gid=""
 if primary_gid="$(resolve_host_group_gid "${primary_group}")"; then

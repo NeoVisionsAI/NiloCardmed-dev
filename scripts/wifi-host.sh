@@ -7,6 +7,15 @@ set -euo pipefail
 export WIFI_INTERFACE="${WIFI_INTERFACE:-wlan0}"
 export WIFI_PASSWORD="${WIFI_PASSWORD:-}"
 
+# connect/disconnect/restore requieren root en el host (polkit desde Docker es frágil).
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+CMD="${1:-}"
+if [[ "${CMD}" =~ ^(connect|disconnect|restore)$ ]] && [[ "$(id -u)" -ne 0 ]]; then
+  if command -v sudo >/dev/null 2>&1; then
+    exec sudo -n -E "${SELF}" "$@"
+  fi
+fi
+
 exec python3 - "$1" "${2:-}" <<'PY'
 from __future__ import annotations
 
@@ -436,19 +445,114 @@ def status() -> dict:
     }
 
 
-def connect(ssid: str) -> dict:
-    snapshot = connection_snapshot()
-    args = ["dev", "wifi", "connect", ssid, "ifname", INTERFACE]
+def build_wifi_connect_args(ssid: str) -> list[str]:
+    """nmcli exige: connect SSID [password PSK] ifname IFACE (password antes de ifname)."""
+    args = ["dev", "wifi", "connect", ssid]
     if PASSWORD:
         args.extend(["password", PASSWORD])
+    args.extend(["ifname", INTERFACE])
+    return args
 
+
+def delete_connection(name: str) -> None:
+    subprocess.run(
+        nmcli_command("connection", "delete", name),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+
+def security_for_ssid(ssid: str) -> str:
     result = subprocess.run(
-        nmcli_command(*args),
+        nmcli_command("-t", "-f", "SSID,SECURITY", "dev", "wifi", "list", "ifname", INTERFACE),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    for line in result.stdout.splitlines():
+        parts = line.split(":", 1)
+        if parts and parts[0] == ssid:
+            sec = (parts[1] if len(parts) > 1 else "").upper()
+            if not sec or sec in {"--", "OPEN", "NONE"}:
+                return "open"
+            if "SAE" in sec or "WPA3" in sec:
+                return "sae"
+            return "wpa-psk"
+    return "wpa-psk"
+
+
+def connect_via_profile(ssid: str) -> subprocess.CompletedProcess[str]:
+    delete_connection(ssid)
+    sec = security_for_ssid(ssid)
+    add_args = [
+        "connection",
+        "add",
+        "type",
+        "wifi",
+        "con-name",
+        ssid,
+        "ifname",
+        INTERFACE,
+        "ssid",
+        ssid,
+    ]
+    if sec == "open" or not PASSWORD:
+        add_args.extend(["wifi-sec.key-mgmt", "none"])
+    elif sec == "sae":
+        add_args.extend(["wifi-sec.key-mgmt", "sae", "wifi-sec.psk", PASSWORD])
+    else:
+        add_args.extend(["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", PASSWORD])
+
+    add = subprocess.run(
+        nmcli_command(*add_args),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if add.returncode != 0:
+        return add
+    return subprocess.run(
+        nmcli_command("connection", "up", ssid, "ifname", INTERFACE),
         capture_output=True,
         text=True,
         timeout=int(os.environ.get("WIFI_CONNECT_TIMEOUT", "30")),
         check=False,
     )
+
+
+def connect(ssid: str) -> dict:
+    snapshot = connection_snapshot()
+    timeout = int(os.environ.get("WIFI_CONNECT_TIMEOUT", "30"))
+
+    result = subprocess.run(
+        nmcli_command(*build_wifi_connect_args(ssid)),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or ""
+        lower = message.lower()
+        if PASSWORD and any(
+            token in lower
+            for token in ("key-mgmt", "add/activate", "secrets", "802-11-wireless-security")
+        ):
+            delete_connection(ssid)
+            result = subprocess.run(
+                nmcli_command(*build_wifi_connect_args(ssid)),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        if result.returncode != 0:
+            result = connect_via_profile(ssid)
 
     if result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip() or f"No se pudo conectar a {ssid}"
