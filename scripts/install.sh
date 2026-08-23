@@ -170,6 +170,7 @@ run_compose_in_install_dir down --remove-orphans 2>/dev/null || true
 
 ensure_bluetooth_host_ready "${INSTALL_DIR}"
 ensure_wifi_ap_host_ready "${INSTALL_DIR}"
+ensure_wifi_nm_permissions "${INSTALL_DIR}"
 ensure_bluetooth_disabled_for_wifi_ap "${INSTALL_DIR}"
 
 log_info "=== Reinicio del servicio ${NILOCARDMED_SERVICE_NAME} ==="

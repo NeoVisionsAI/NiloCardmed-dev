@@ -523,6 +523,34 @@ ensure_wifi_ap_host_ready() {
   INSTALL_DIR="${install_dir}"   bash "${script}" || log_warn "ensure-wifi-ap falló — revisa hostapd/dnsmasq"
 }
 
+# Polkit/sudoers para wifi_connect desde contenedor Docker (NetworkManager).
+ensure_wifi_nm_permissions() {
+  local install_dir="${1:-${INSTALL_DIR:-}}"
+
+  if [[ -z "${install_dir}" ]]; then
+    return 0
+  fi
+
+  if [[ -f "${install_dir}/deploy.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a && source "${install_dir}/deploy.env" && set +a
+  fi
+
+  if ! is_true "${ENABLE_WIFI:-false}"; then
+    return 0
+  fi
+
+  local script="${install_dir}/scripts/ensure-wifi-nm-permissions.sh"
+  if [[ ! -f "${script}" ]]; then
+    log_warn "No encontrado: ${script}"
+    return 0
+  fi
+
+  log_info "=== Permisos NetworkManager (wifi_connect desde app) ==="
+  INSTALL_DIR="${install_dir}" RUN_USER="${NILOCARDMED_RUN_USER:-cardmed}" bash "${script}" \
+    || log_warn "ensure-wifi-nm-permissions falló — wifi_connect puede dar 'Insufficient privileges'"
+}
+
 # Apaga BlueZ/rfkill cuando el aprovisionamiento es por WiFi AP (ahorro memoria).
 ensure_bluetooth_disabled_for_wifi_ap() {
   local install_dir="${1:-${INSTALL_DIR:-}}"

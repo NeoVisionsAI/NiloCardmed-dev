@@ -26,11 +26,26 @@ PASSWORD = os.environ.get("WIFI_PASSWORD", "")
 COMMAND = sys.argv[1] if len(sys.argv) > 1 else ""
 ARG = sys.argv[2] if len(sys.argv) > 2 else ""
 SCAN_WAIT_SECONDS = float(os.environ.get("WIFI_SCAN_WAIT_SECONDS", "2.5"))
+NMCLI_MUTATING = frozenset({"connect", "disconnect", "restore"})
+
+
+def nmcli_command(*args: str) -> list[str]:
+    """nmcli; usa sudo -n en operaciones que modifican red si no somos root."""
+    nmcli = shutil.which("nmcli") or "nmcli"
+    base = [nmcli, *args]
+    if COMMAND not in NMCLI_MUTATING or os.geteuid() == 0:
+        return base
+    if os.environ.get("WIFI_NMCLI_SUDO", "1").lower() in ("0", "false", "no"):
+        return base
+    sudo = shutil.which("sudo")
+    if sudo:
+        return [sudo, "-n", nmcli, *args]
+    return base
 
 
 def run_nmcli(*args: str, timeout: int = 30, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
-        ["nmcli", *args],
+        nmcli_command(*args),
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -85,7 +100,7 @@ def restore_connection(snapshot: dict | None) -> bool:
     connection = snapshot.get("connection")
     if connection and connection not in {"", "--"}:
         result = subprocess.run(
-            ["nmcli", "connection", "up", connection, "ifname", INTERFACE],
+            nmcli_command("connection", "up", connection, "ifname", INTERFACE),
             capture_output=True,
             text=True,
             timeout=int(os.environ.get("WIFI_CONNECT_TIMEOUT", "30")),
@@ -97,7 +112,7 @@ def restore_connection(snapshot: dict | None) -> bool:
     ssid = snapshot.get("ssid")
     if ssid:
         result = subprocess.run(
-            ["nmcli", "dev", "wifi", "connect", ssid, "ifname", INTERFACE],
+            nmcli_command("dev", "wifi", "connect", ssid, "ifname", INTERFACE),
             capture_output=True,
             text=True,
             timeout=int(os.environ.get("WIFI_CONNECT_TIMEOUT", "30")),
@@ -303,7 +318,7 @@ def connect(ssid: str) -> dict:
         args.extend(["password", PASSWORD])
 
     result = subprocess.run(
-        ["nmcli", *args],
+        nmcli_command(*args),
         capture_output=True,
         text=True,
         timeout=int(os.environ.get("WIFI_CONNECT_TIMEOUT", "30")),
@@ -351,7 +366,7 @@ def connect(ssid: str) -> dict:
 
 
 def disconnect() -> dict:
-    subprocess.run(["nmcli", "dev", "disconnect", INTERFACE], check=False)
+    subprocess.run(nmcli_command("dev", "disconnect", INTERFACE), check=False)
     return status()
 
 
